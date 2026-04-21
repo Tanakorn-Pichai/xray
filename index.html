@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>โปรแกรมเปลี่ยนชื่อไฟล์ Xray ตาม HN</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --panel: rgba(15, 23, 42, 0.88);
+        --panel-2: rgba(30, 41, 59, 0.96);
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+        --accent-2: #0ea5e9;
+        --success: #22c55e;
+        --danger: #ef4444;
+        --border: rgba(148, 163, 184, 0.2);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: Arial, Helvetica, sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(14, 165, 233, 0.15), transparent 30%),
+          linear-gradient(135deg, #020617, #111827 55%, #0f172a);
+        color: var(--text);
+      }
+
+      .layout {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 24px auto;
+        display: grid;
+        gap: 20px;
+      }
+
+      .card {
+        padding: 24px;
+        border-radius: 20px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+        backdrop-filter: blur(10px);
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+      }
+
+      .hero,
+      .mode-panel {
+        display: grid;
+        gap: 12px;
+      }
+
+      .muted,
+      p,
+      li,
+      label {
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .steps {
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      .mode-grid,
+      .summary {
+        display: grid;
+        gap: 16px;
+      }
+
+      .mode-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mode-option {
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 18px;
+        background: rgba(15, 23, 42, 0.72);
+      }
+
+      .mode-option input {
+        margin-right: 10px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 12px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 12px;
+        padding: 12px 18px;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+        transition:
+          transform 0.15s ease,
+          opacity 0.15s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .primary {
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: #082f49;
+      }
+
+      .secondary {
+        background: rgba(148, 163, 184, 0.12);
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+
+      .path-box,
+      .status,
+      .log-list,
+      .note {
+        margin-top: 16px;
+        padding: 16px;
+        border-radius: 16px;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+      }
+
+      .path-box code {
+        color: #bae6fd;
+        word-break: break-all;
+      }
+
+      .summary {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .metric {
+        padding: 18px;
+        border-radius: 16px;
+        background: rgba(15, 23, 42, 0.75);
+        border: 1px solid var(--border);
+      }
+
+      .metric strong {
+        display: block;
+        font-size: 1.8rem;
+        margin-top: 8px;
+        color: white;
+      }
+
+      .status {
+        white-space: pre-wrap;
+      }
+
+      .status.success {
+        border-color: rgba(34, 197, 94, 0.35);
+      }
+
+      .status.error {
+        border-color: rgba(239, 68, 68, 0.35);
+      }
+
+      .status.info {
+        border-color: rgba(56, 189, 248, 0.35);
+      }
+
+      .log-list {
+        max-height: 320px;
+        overflow: auto;
+        padding-left: 20px;
+      }
+
+      .log-list li {
+        margin-bottom: 10px;
+        word-break: break-word;
+      }
+
+      .renamed {
+        color: #bbf7d0;
+      }
+
+      .skipped {
+        color: #fde68a;
+      }
+
+      .inline-code {
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #93c5fd;
+      }
+
+      @media (max-width: 860px) {
+        .mode-grid,
+        .summary {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="layout">
+      <section class="card hero">
+        <h1>โปรแกรมเปลี่ยนชื่อไฟล์ Xray ตาม HN</h1>
+        <p>
+          โปรแกรมนี้รองรับ 2 โหมดการทำงาน เพื่อใช้กับ Xray คนละค่าย โดยให้คุณเลือกโหมดก่อน
+          แล้วค่อยเลือกโฟลเดอร์ root ที่ต้องการประมวลผล
+        </p>
+      </section>
+
+      <section class="card mode-panel">
+        <h2>เลือกโหมด</h2>
+
+        <div class="mode-grid">
+          <label class="mode-option">
+            <div>
+              <input type="radio" name="mode" value="vendor1" checked />
+              <strong>ค่าย 1</strong>
+            </div>
+            <div class="muted">
+              โครงสร้างโฟลเดอร์แบบ:
+              วันที่ → HN → ชื่อสัตว์ → ไฟล์ภาพ
+              <br />
+              โปรแกรมจะใช้ชื่อโฟลเดอร์ HN มาเปลี่ยนชื่อไฟล์ภาพภายใต้ HN นั้น
+            </div>
+          </label>
+
+          <label class="mode-option">
+            <div>
+              <input type="radio" name="mode" value="vendor2" />
+              <strong>ค่าย 2</strong>
+            </div>
+            <div class="muted">
+              ใน root folder จะเป็นไฟล์ภาพ Xray โดยตรง
+              <br />
+              โปรแกรมจะเปิดภาพ, ทำ OCR หาเลข HN จากในภาพ แล้วเปลี่ยนชื่อไฟล์เป็น HN
+            </div>
+          </label>
+        </div>
+
+        <div id="modeDescription" class="note"></div>
+
+        <div class="actions">
+          <button id="selectFolderButton" class="secondary">เลือกโฟลเดอร์</button>
+          <button id="runButton" class="primary" disabled>เริ่มเปลี่ยนชื่อไฟล์</button>
+        </div>
+
+        <div class="path-box">
+          <div class="muted">โฟลเดอร์ที่เลือก</div>
+          <code id="selectedPath">ยังไม่ได้เลือกโฟลเดอร์</code>
+        </div>
+
+        <div id="status" class="status info">พร้อมทำงาน</div>
+      </section>
+
+      <section class="card">
+        <h2>วิธีใช้งาน</h2>
+        <ol id="stepsList" class="steps"></ol>
+      </section>
+
+      <section class="card">
+        <h2>สรุปผล</h2>
+        <div class="summary">
+          <div class="metric">
+            <div class="muted" id="metricOneLabel">จำนวนโฟลเดอร์วันที่</div>
+            <strong id="metricOneValue">0</strong>
+          </div>
+          <div class="metric">
+            <div class="muted">จำนวนไฟล์ที่เปลี่ยนชื่อ</div>
+            <strong id="renamedCount">0</strong>
+          </div>
+          <div class="metric">
+            <div class="muted">จำนวนรายการที่ข้าม</div>
+            <strong id="skippedCount">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>รายการไฟล์ที่เปลี่ยนชื่อ</h2>
+        <ul id="renamedList" class="log-list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>รายการที่ข้าม</h2>
+        <ul id="skippedList" class="log-list"></ul>
+      </section>
+    </main>
+
+    <script>
+      const modeDescriptions = {
+        vendor1: {
+          description:
+            "ค่าย 1: ใช้ชื่อโฟลเดอร์ HN เป็นต้นทางในการเปลี่ยนชื่อไฟล์ภาพในโฟลเดอร์ย่อยของสัตว์",
+          metricLabel: "จำนวนโฟลเดอร์วันที่",
+          steps: [
+            "เลือกโหมด ค่าย 1",
+            "กดปุ่ม เลือกโฟลเดอร์ แล้วเลือก root ของ report",
+            "โปรแกรมจะไล่ตามโครงสร้าง วันที่ → HN → ชื่อสัตว์ → ไฟล์ภาพ",
+            "ชื่อไฟล์ภาพแต่ละไฟล์จะถูกเปลี่ยนเป็นเลข HN ของโฟลเดอร์นั้น",
+            "ถ้าชื่อชนกัน โปรแกรมจะเติม _1, _2 ต่อท้ายให้อัตโนมัติ"
+          ]
+        },
+        vendor2: {
+          description:
+            "ค่าย 2: ใน root folder ต้องมีไฟล์ภาพ Xray อยู่โดยตรง โปรแกรมจะ OCR หาเลข HN จากในภาพแล้วนำมาเปลี่ยนชื่อไฟล์",
+          metricLabel: "จำนวนไฟล์ภาพใน root",
+          steps: [
+            "เลือกโหมด ค่าย 2",
+            "กดปุ่ม เลือกโฟลเดอร์ แล้วเลือกโฟลเดอร์ที่มีไฟล์ภาพ Xray อยู่ในระดับ root",
+            "โปรแกรมจะเปิดแต่ละภาพแล้วทำ OCR",
+            "ระบบจะดึงเลข HN จากข้อความในภาพ",
+            "จากนั้นจะเปลี่ยนชื่อไฟล์เป็น HN และเติม _1, _2 ถ้าชื่อซ้ำ"
+          ]
+        }
+      };
+
+      const selectFolderButton = document.getElementById("selectFolderButton");
+      const runButton = document.getElementById("runButton");
+      const selectedPath = document.getElementById("selectedPath");
+      const statusBox = document.getElementById("status");
+      const metricOneLabel = document.getElementById("metricOneLabel");
+      const metricOneValue = document.getElementById("metricOneValue");
+      const renamedCount = document.getElementById("renamedCount");
+      const skippedCount = document.getElementById("skippedCount");
+      const renamedList = document.getElementById("renamedList");
+      const skippedList = document.getElementById("skippedList");
+      const modeDescription = document.getElementById("modeDescription");
+      const stepsList = document.getElementById("stepsList");
+
+      let currentReportPath = "";
+
+      function getSelectedMode() {
+        return document.querySelector('input[name="mode"]:checked').value;
+      }
+
+      function setStatus(message, type = "info") {
+        statusBox.textContent = message;
+        statusBox.className = `status ${type}`;
+      }
+
+      function renderList(element, items, type) {
+        element.innerHTML = "";
+
+        if (!items.length) {
+          const emptyItem = document.createElement("li");
+          emptyItem.textContent = "ไม่มีรายการ";
+          emptyItem.className = type;
+          element.appendChild(emptyItem);
+          return;
+        }
+
+        for (const item of items) {
+          const li = document.createElement("li");
+          li.className = type;
+          li.textContent = item;
+          element.appendChild(li);
+        }
+      }
+
+      function updateModeUI() {
+        const selectedMode = getSelectedMode();
+        const config = modeDescriptions[selectedMode];
+
+        modeDescription.textContent = config.description;
+        metricOneLabel.textContent = config.metricLabel;
+        stepsList.innerHTML = "";
+
+        for (const step of config.steps) {
+          const li = document.createElement("li");
+          li.textContent = step;
+          stepsList.appendChild(li);
+        }
+
+        currentReportPath = "";
+        selectedPath.textContent = "ยังไม่ได้เลือกโฟลเดอร์";
+        runButton.disabled = true;
+        setStatus("เลือกโหมดเรียบร้อยแล้ว กรุณาเลือกโฟลเดอร์", "info");
+
+        updateSummary({
+          mode: selectedMode,
+          dateFolderCount: 0,
+          imageFileCount: 0,
+          renamedItems: [],
+          skippedItems: []
+        });
+      }
+
+      function updateSummary(result) {
+        const selectedMode = result.mode || getSelectedMode();
+        metricOneValue.textContent =
+          selectedMode === "vendor2"
+            ? result.imageFileCount || 0
+            : result.dateFolderCount || 0;
+
+        renamedCount.textContent = result.renamedItems.length || 0;
+        skippedCount.textContent = result.skippedItems.length || 0;
+
+        renderList(
+          renamedList,
+          result.renamedItems.map((item) => {
+            if (selectedMode === "vendor2") {
+              return `${item.oldName} → ${item.newName} (HN: ${item.hn})`;
+            }
+
+            return `[${item.dateFolder} / ${item.hn} / ${item.petFolder}] ${item.oldName} → ${item.newName}`;
+          }),
+          "renamed"
+        );
+
+        renderList(
+          skippedList,
+          result.skippedItems.map((item) => {
+            const preview = item.ocrPreview ? ` | OCR: ${item.ocrPreview}` : "";
+            return `${item.reason} : ${item.path}${preview}`;
+          }),
+          "skipped"
+        );
+      }
+
+      for (const modeInput of document.querySelectorAll('input[name="mode"]')) {
+        modeInput.addEventListener("change", updateModeUI);
+      }
+
+      selectFolderButton.addEventListener("click", async () => {
+        setStatus("กำลังเลือกโฟลเดอร์...", "info");
+
+        try {
+          const folderPath = await window.xrayApp.selectReportFolder();
+
+          if (!folderPath) {
+            setStatus("ยกเลิกการเลือกโฟลเดอร์", "info");
+            return;
+          }
+
+          currentReportPath = folderPath;
+          selectedPath.textContent = folderPath;
+          runButton.disabled = false;
+          setStatus("เลือกโฟลเดอร์เรียบร้อยแล้ว พร้อมเริ่มเปลี่ยนชื่อไฟล์", "success");
+        } catch (error) {
+          setStatus(`เกิดข้อผิดพลาดในการเลือกโฟลเดอร์: ${error.message}`, "error");
+        }
+      });
+
+      runButton.addEventListener("click", async () => {
+        const selectedMode = getSelectedMode();
+
+        if (!currentReportPath) {
+          setStatus("กรุณาเลือกโฟลเดอร์ก่อน", "error");
+          return;
+        }
+
+        runButton.disabled = true;
+        selectFolderButton.disabled = true;
+        setStatus(
+          selectedMode === "vendor2"
+            ? "กำลัง OCR หา HN และเปลี่ยนชื่อไฟล์..."
+            : "กำลังเปลี่ยนชื่อไฟล์ Xray...",
+          "info"
+        );
+
+        try {
+          const result = await window.xrayApp.renameXrayFiles({
+            mode: selectedMode,
+            reportRootPath: currentReportPath
+          });
+
+          updateSummary(result);
+
+          setStatus(
+            `เสร็จสิ้น เปลี่ยนชื่อไฟล์ ${result.renamedItems.length} ไฟล์ และข้าม ${result.skippedItems.length} รายการ`,
+            "success"
+          );
+        } catch (error) {
+          setStatus(`เกิดข้อผิดพลาด: ${error.message}`, "error");
+        } finally {
+          runButton.disabled = false;
+          selectFolderButton.disabled = false;
+        }
+      });
+
+      updateModeUI();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "xray",
+  "version": "1.0.0",
+  "description": "Electron app",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.1.4"
+  },
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "image-size": "^2.0.2",
+    "sharp": "^0.34.5",
+    "tesseract.js": "^7.0.0"
+  }
+}
