@@ -141,6 +141,14 @@ function extractHN(rawText) {
 
 
 async function runOCR(imagePath) {
+  // ตรวจสอบว่าไฟล์มีอยู่จริง
+  if (!fs.existsSync(imagePath)) {
+    throw new Error(`ไฟล์ไม่พบ: ${imagePath}`);
+  }
+
+  // รอให้ไฟล์เขียนเสร็จสมบูรณ์
+  await new Promise(resolve => setTimeout(resolve, 500));
+
   return Tesseract.recognize(imagePath, "eng", {
     tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     tessedit_pageseg_mode: 6,
@@ -266,6 +274,11 @@ async function renameVendor1XrayFiles(reportRootPath) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
 
+  const backupPath = path.join(reportRootPath, "Backup");
+  if (!fs.existsSync(backupPath)) {
+    fs.mkdirSync(backupPath, { recursive: true });
+  }
+
   const dateFolders = getDirectories(reportRootPath);
   const renamedItems = [];
   const skippedItems = [];
@@ -306,6 +319,18 @@ async function renameVendor1XrayFiles(reportRootPath) {
         }
 
         for (const imageFile of imageFiles) {
+          // Backup ก่อนเปลี่ยนชื่อ
+          const backupFile = path.join(backupPath, imageFile.name);
+          try {
+            fs.copyFileSync(imageFile.path, backupFile);
+          } catch (err) {
+            skippedItems.push({
+              reason: `Backup ล้มเหลว: ${err.message}`,
+              path: imageFile.path,
+            });
+            continue;
+          }
+
           const result = renameUsingHN(petFolder.path, imageFile, hn, {
             dateFolder: dateFolder.name,
             petFolder: petFolder.name,
@@ -324,6 +349,7 @@ async function renameVendor1XrayFiles(reportRootPath) {
   return {
     mode: "vendor1",
     reportRootPath,
+    backupPath,
     dateFolderCount: dateFolders.length,
     renamedItems,
     skippedItems,
@@ -391,6 +417,9 @@ function startWatchingFolder(reportRootPath) {
     return;
   }
 
+  // ตรวจสอบ vendor type ล่วงหน้า
+  let vendorType = detectVendorType(reportRootPath);
+
   folderWatcher = chokidar.watch(reportRootPath, {
     ignored: /(^|[\/\\])\.|_ocr/,
     persistent: true,
@@ -403,9 +432,23 @@ function startWatchingFolder(reportRootPath) {
 
   folderWatcher.on("add", async (filePath) => {
     const ext = path.extname(filePath).toLowerCase();
-    
     if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
       return;
+    }
+
+    // ตรวจสอบ vendor type ใหม่ทุกครั้ง (เผื่อโครงสร้างเปลี่ยน)
+    vendorType = detectVendorType(reportRootPath);
+
+    try {
+      if (vendorType === "vendor2") {
+        // เปลี่ยนชื่อและ backup ทันที
+        await renameVendor2XrayFiles(reportRootPath);
+      } else if (vendorType === "vendor1") {
+        await renameVendor1XrayFiles(reportRootPath);
+      }
+    } catch (err) {
+      // log error
+      console.warn("Auto-rename error:", err.message);
     }
 
     // ส่ง event ไปยัง renderer process
@@ -444,7 +487,21 @@ ipcMain.handle("select-report-folder", async () => {
   });
 
   if (result.canceled) return null;
-  return result.filePaths[0];
+  const folderPath = result.filePaths[0];
+
+  // ตรวจสอบ vendor type และเปลี่ยนชื่อทันที
+  const vendorType = detectVendorType(folderPath);
+  try {
+    if (vendorType === "vendor2") {
+      await renameVendor2XrayFiles(folderPath);
+    } else if (vendorType === "vendor1") {
+      await renameVendor1XrayFiles(folderPath);
+    }
+  } catch (err) {
+    // log error
+    console.warn("Auto-rename on select error:", err.message);
+  }
+  return folderPath;
 });
 
 ipcMain.handle("rename-xray-files", async (_event, payload) => {

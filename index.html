@@ -224,53 +224,26 @@
       <section class="card hero">
         <h1>โปรแกรมเปลี่ยนชื่อไฟล์ Xray ตาม HN</h1>
         <p>
-          โปรแกรมนี้รองรับ 2 โหมดการทำงาน เพื่อใช้กับ Xray คนละค่าย โดยให้คุณเลือกโหมดก่อน
-          แล้วค่อยเลือกโฟลเดอร์ root ที่ต้องการประมวลผล
+          โปรแกรมนี้จะตรวจจับประเภท Xray อัตโนมัติ เพียงเลือกโฟลเดอร์แล้วนั่ง รอ เมื่อมีรูปใหม่จะเปลี่ยนชื่อให้เอง
         </p>
       </section>
 
       <section class="card mode-panel">
-        <h2>เลือกโหมด</h2>
-
-        <div class="mode-grid">
-          <label class="mode-option">
-            <div>
-              <input type="radio" name="mode" value="vendor1" checked />
-              <strong>ค่าย 1</strong>
-            </div>
-            <div class="muted">
-              โครงสร้างโฟลเดอร์แบบ:
-              วันที่ → HN → ชื่อสัตว์ → ไฟล์ภาพ
-              <br />
-              โปรแกรมจะใช้ชื่อโฟลเดอร์ HN มาเปลี่ยนชื่อไฟล์ภาพภายใต้ HN นั้น
-            </div>
-          </label>
-
-          <label class="mode-option">
-            <div>
-              <input type="radio" name="mode" value="vendor2" />
-              <strong>ค่าย 2</strong>
-            </div>
-            <div class="muted">
-              ใน root folder จะเป็นไฟล์ภาพ Xray โดยตรง
-              <br />
-              โปรแกรมจะเปิดภาพ, ทำ OCR หาเลข HN จากในภาพ แล้วเปลี่ยนชื่อไฟล์เป็น HN
-            </div>
-          </label>
-        </div>
-
-        <div id="modeDescription" class="note"></div>
-
         <div class="actions">
-          <button id="selectFolderButton" class="secondary">เลือกโฟลเดอร์</button>
+          <button id="selectFolderButton" class="primary">เลือกโฟลเดอร์</button>
         </div>
 
         <div class="path-box">
           <div class="muted">โฟลเดอร์ที่เลือก</div>
           <code id="selectedPath">ยังไม่ได้เลือกโฟลเดอร์</code>
         </div>
+        
+        <div class="path-box">
+          <div class="muted">ประเภทที่ตรวจพบ</div>
+          <code id="detectedMode">-</code>
+        </div>
 
-        <div id="status" class="status info">พร้อมทำงาน</div>
+        <div id="status" class="status info">เลือกโฟลเดอร์เพื่อเริ่มต้น</div>
       </section>
 
       <section class="card">
@@ -308,50 +281,17 @@
     </main>
 
     <script>
-      const modeDescriptions = {
-        vendor1: {
-          description:
-            "ค่าย 1: ใช้ชื่อโฟลเดอร์ HN เป็นต้นทางในการเปลี่ยนชื่อไฟล์ภาพในโฟลเดอร์ย่อยของสัตว์",
-          metricLabel: "จำนวนโฟลเดอร์วันที่",
-          steps: [
-            "เลือกโหมด ค่าย 1",
-            "กดปุ่ม เลือกโฟลเดอร์ แล้วเลือก root ของ report",
-            "โปรแกรมจะไล่ตามโครงสร้าง วันที่ → HN → ชื่อสัตว์ → ไฟล์ภาพ",
-            "ชื่อไฟล์ภาพแต่ละไฟล์จะถูกเปลี่ยนเป็นเลข HN ของโฟลเดอร์นั้น",
-            "ถ้าชื่อชนกัน โปรแกรมจะเติม _1, _2 ต่อท้ายให้อัตโนมัติ"
-          ]
-        },
-        vendor2: {
-          description:
-            "ค่าย 2: ใน root folder ต้องมีไฟล์ภาพ Xray อยู่โดยตรง โปรแกรมจะ OCR หาเลข HN จากในภาพแล้วนำมาเปลี่ยนชื่อไฟล์",
-          metricLabel: "จำนวนไฟล์ภาพใน root",
-          steps: [
-            "เลือกโหมด ค่าย 2",
-            "กดปุ่ม เลือกโฟลเดอร์ แล้วเลือกโฟลเดอร์ที่มีไฟล์ภาพ Xray อยู่ในระดับ root",
-            "โปรแกรมจะเปิดแต่ละภาพแล้วทำ OCR",
-            "ระบบจะดึงเลข HN จากข้อความในภาพ",
-            "จากนั้นจะเปลี่ยนชื่อไฟล์เป็น HN และเติม _1, _2 ถ้าชื่อซ้ำ"
-          ]
-        }
-      };
-
       const selectFolderButton = document.getElementById("selectFolderButton");
       const selectedPath = document.getElementById("selectedPath");
+      const detectedMode = document.getElementById("detectedMode");
       const statusBox = document.getElementById("status");
-      const metricOneLabel = document.getElementById("metricOneLabel");
-      const metricOneValue = document.getElementById("metricOneValue");
       const renamedCount = document.getElementById("renamedCount");
       const skippedCount = document.getElementById("skippedCount");
       const renamedList = document.getElementById("renamedList");
       const skippedList = document.getElementById("skippedList");
-      const modeDescription = document.getElementById("modeDescription");
-      const stepsList = document.getElementById("stepsList");
 
       let currentReportPath = "";
-
-      function getSelectedMode() {
-        return document.querySelector('input[name="mode"]:checked').value;
-      }
+      let detectedVendor = null;
 
       function setStatus(message, type = "info") {
         statusBox.textContent = message;
@@ -378,11 +318,11 @@
           });
           
           // ตรวจจับรูปแบบ
-          window.xrayApp.detectVendorType(lastPath).then(detectedVendor => {
-            if (detectedVendor) {
-              document.querySelector(`input[name="mode"][value="${detectedVendor}"]`).checked = true;
-              updateModeUI();
-              setStatus(`โหลดโฟลเดอร์ที่ใช้ล่าสุด - ตรวจพบ: ${detectedVendor === "vendor1" ? "ค่าย 1" : "ค่าย 2"}`, "success");
+          window.xrayApp.detectVendorType(lastPath).then(vendor => {
+            if (vendor) {
+              detectedVendor = vendor;
+              detectedMode.textContent = vendor === "vendor1" ? "ค่าย 1" : "ค่าย 2";
+              setStatus(`โหลดโฟลเดอร์ที่ใช้ล่าสุด - ตรวจพบ: ${vendor === "vendor1" ? "ค่าย 1" : "ค่าย 2"} - กำลังตรวจสอบไฟล์ใหม่`, "success");
             }
           }).catch(err => {
             console.error("Error detecting vendor:", err);
@@ -409,42 +349,9 @@
         }
       }
 
-      function updateModeUI() {
-        const selectedMode = getSelectedMode();
-        const config = modeDescriptions[selectedMode];
-
-        modeDescription.textContent = config.description;
-        metricOneLabel.textContent = config.metricLabel;
-        stepsList.innerHTML = "";
-
-        for (const step of config.steps) {
-          const li = document.createElement("li");
-          li.textContent = step;
-          stepsList.appendChild(li);
-        }
-
-        if (currentReportPath) {
-          setStatus("พร้อมกำลังตรวจสอบไฟล์ใหม่", "success");
-        } else {
-          setStatus("เลือกโหมดเรียบร้อยแล้ว กรุณาเลือกโฟลเดอร์", "info");
-        }
-
-        updateSummary({
-          mode: selectedMode,
-          dateFolderCount: 0,
-          imageFileCount: 0,
-          renamedItems: [],
-          skippedItems: []
-        });
-      }
-
       function updateSummary(result) {
-        const selectedMode = result.mode || getSelectedMode();
-        metricOneValue.textContent =
-          selectedMode === "vendor2"
-            ? result.imageFileCount || 0
-            : result.dateFolderCount || 0;
-
+        const selectedMode = result.mode || detectedVendor;
+        
         renamedCount.textContent = result.renamedItems.length || 0;
         skippedCount.textContent = result.skippedItems.length || 0;
 
@@ -470,10 +377,6 @@
         );
       }
 
-      for (const modeInput of document.querySelectorAll('input[name="mode"]')) {
-        modeInput.addEventListener("change", updateModeUI);
-      }
-
       selectFolderButton.addEventListener("click", async () => {
         setStatus("กำลังเลือกโฟลเดอร์...", "info");
 
@@ -493,13 +396,13 @@
           await window.xrayApp.startWatchingFolder(folderPath);
           
           // ตรวจจับรูปแบบทันที
-          const detectedVendor = await window.xrayApp.detectVendorType(folderPath);
-          if (detectedVendor) {
-            document.querySelector(`input[name="mode"][value="${detectedVendor}"]`).checked = true;
-            updateModeUI();
-            setStatus(`ตรวจพบ: ${detectedVendor === "vendor1" ? "ค่าย 1" : "ค่าย 2"} - กำลังตรวจสอบไฟล์ใหม่`, "success");
+          const vendor = await window.xrayApp.detectVendorType(folderPath);
+          if (vendor) {
+            detectedVendor = vendor;
+            detectedMode.textContent = vendor === "vendor1" ? "ค่าย 1" : "ค่าย 2";
+            setStatus(`ตรวจพบ: ${vendor === "vendor1" ? "ค่าย 1" : "ค่าย 2"} - กำลังตรวจสอบไฟล์ใหม่`, "success");
           } else {
-            setStatus("โปรดเลือกโหมดด้วยตนเองและรอไฟล์ใหม่", "info");
+            setStatus("ไม่พบไฟล์ภาพในโฟลเดอร์ที่เลือก", "error");
           }
         } catch (error) {
           setStatus(`เกิดข้อผิดพลาดในการเลือกโฟลเดอร์: ${error.message}`, "error");
@@ -507,15 +410,13 @@
       });
 
       async function autoRenameImages() {
-        const selectedMode = getSelectedMode();
-
-        if (!currentReportPath) {
+        if (!currentReportPath || !detectedVendor) {
           return;
         }
 
         selectFolderButton.disabled = true;
         setStatus(
-          selectedMode === "vendor2"
+          detectedVendor === "vendor2"
             ? "กำลัง OCR หา HN และเปลี่ยนชื่อไฟล์..."
             : "กำลังเปลี่ยนชื่อไฟล์ Xray...",
           "info"
@@ -523,7 +424,7 @@
 
         try {
           const result = await window.xrayApp.renameXrayFiles({
-            mode: selectedMode,
+            mode: detectedVendor,
             reportRootPath: currentReportPath
           });
 
