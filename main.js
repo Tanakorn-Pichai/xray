@@ -5,6 +5,7 @@ const Tesseract = require("tesseract.js");
 const sharp = require("sharp");
 const { imageSize } = require("image-size");
 const chokidar = require("chokidar");
+
 app.disableHardwareAcceleration();
 
 let tray = null;
@@ -21,6 +22,9 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set([
 
 let mainWindow = null;
 let folderWatcher = null;
+let isQuitting = false;
+let processingQueue = Promise.resolve();
+const generatedPaths = new Set();
 
 function isDirectory(targetPath) {
   try {
@@ -81,12 +85,127 @@ function buildUniqueFilePath(directoryPath, desiredName, extension) {
 function normalizeHN(code) {
   if (!code) return null;
 
-  return code
+  return String(code)
     .toUpperCase()
     .replace(/\s+/g, "")
     .replace(/O/g, "0")
     .replace(/I/g, "1")
     .replace(/S/g, "5");
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isBackupPath(filePath) {
+  return filePath.split(path.sep).includes("Backup");
+}
+
+function isOcrTempPath(filePath) {
+  return String(filePath).toLowerCase().includes("_ocr");
+}
+
+function isGeneratedPath(filePath) {
+  return generatedPaths.has(path.resolve(filePath));
+}
+
+function markGeneratedPath(filePath) {
+  const resolved = path.resolve(filePath);
+  generatedPaths.add(resolved);
+
+  const timer = setTimeout(() => {
+    generatedPaths.delete(resolved);
+  }, 15000);
+
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
+}
+
+function isAlreadyTargetFile(nameWithoutExt, hn) {
+  const normalizedName = normalizeHN(nameWithoutExt);
+  const normalizedHN = normalizeHN(hn);
+
+  if (!normalizedName || !normalizedHN) return false;
+
+  return (
+    normalizedName === normalizedHN ||
+    normalizedName.startsWith(`${normalizedHN}_`)
+  );
+}
+
+function isLikelyVendor2ProcessedFile(nameWithoutExt) {
+  const upper = String(nameWithoutExt).toUpperCase();
+
+  return /^[A-Z0-9]{4,}(?:_\d+)?$/.test(upper);
+}
+
+async function closeFolderWatcher() {
+  if (!folderWatcher) return;
+
+  const watcher = folderWatcher;
+  folderWatcher = null;
+
+  try {
+    await watcher.close();
+  } catch (err) {
+    console.warn("Failed to close watcher:", err.message);
+  }
+}
+
+async function enqueueTask(task) {
+  processingQueue = processingQueue
+    .then(task)
+    .catch((err) => {
+      console.warn("Processing error:", err.message);
+    });
+
+  return processingQueue;
+}
+
+function normalizePathSafe(targetPath) {
+  try {
+    return path.resolve(targetPath);
+  } catch {
+    return targetPath;
+  }
+}
+
+function resolveVendor1ContextFromFilePath(reportRootPath, imagePath) {
+  const root = normalizePathSafe(reportRootPath);
+  const file = normalizePathSafe(imagePath);
+
+  const relative = path.relative(root, file);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return null;
+  }
+
+  const parts = relative.split(path.sep);
+  if (parts.length < 4) {
+    return null;
+  }
+
+  const [dateFolderName, hnFolderName, petFolderName] = parts;
+  const dateFolderPath = path.join(root, dateFolderName);
+  const hnFolderPath = path.join(dateFolderPath, hnFolderName);
+  const petFolderPath = path.join(hnFolderPath, petFolderName);
+
+  if (
+    !isDirectory(dateFolderPath) ||
+    !isDirectory(hnFolderPath) ||
+    !isDirectory(petFolderPath)
+  ) {
+    return null;
+  }
+
+  return {
+    dateFolderName,
+    hnFolderName,
+    petFolderName,
+    dateFolderPath,
+    hnFolderPath,
+    petFolderPath,
+  };
 }
 
 async function safeUnlink(filePath, maxRetries = 3) {
@@ -98,7 +217,6 @@ async function safeUnlink(filePath, maxRetries = 3) {
       return true;
     } catch (err) {
       if (i < maxRetries - 1) {
-        // รอ 100ms แล้วลองใหม่
         await new Promise((resolve) => setTimeout(resolve, 100));
       } else {
         console.warn(
@@ -138,6 +256,7 @@ function extractHN(rawText) {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+
   if (lines.length < 1) return null;
 
   let line = lines[0];
@@ -153,12 +272,10 @@ function extractHN(rawText) {
 }
 
 async function runOCR(imagePath) {
-  // ตรวจสอบว่าไฟล์มีอยู่จริง
   if (!fs.existsSync(imagePath)) {
     throw new Error(`ไฟล์ไม่พบ: ${imagePath}`);
   }
 
-  // รอให้ไฟล์เขียนเสร็จสมบูรณ์
   await new Promise((resolve) => setTimeout(resolve, 500));
 
   return Tesseract.recognize(imagePath, "eng", {
@@ -172,35 +289,235 @@ function renameUsingHN(directoryPath, imageFile, hn, metadata = {}) {
   const extension = path.extname(imageFile.name);
   const nameWithoutExt = path.parse(imageFile.name).name;
 
-  // ถ้าชื่อไฟล์เป็น HN อยู่แล้วไม่ต้องทำอะไร
-  if (nameWithoutExt === hn) {
+  if (isAlreadyTargetFile(nameWithoutExt, hn)) {
     return {
       type: "skipped",
       item: { reason: "ชื่อไฟล์ตรงกับรหัส DX แล้ว", path: imageFile.path },
     };
   }
 
-  // ป้องกัน loop rename เช่น HN_1.jpg
-  if (nameWithoutExt.startsWith(hn)) {
-    return {
-      type: "skipped",
-      item: { reason: "ไฟล์ถูก rename แล้ว", path: imageFile.path },
-    };
-  }
-
   const uniqueTarget = buildUniqueFilePath(directoryPath, hn, extension);
 
   fs.renameSync(imageFile.path, uniqueTarget.fullPath);
+  markGeneratedPath(uniqueTarget.fullPath);
 
   return {
     type: "renamed",
     item: {
       oldName: imageFile.name,
       newName: uniqueTarget.fileName,
+      targetPath: uniqueTarget.fullPath,
       hn,
       ...metadata,
     },
   };
+}
+
+async function processVendor2ImageFile(reportRootPath, imagePath) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    throw new Error("ไม่พบโฟลเดอร์ root");
+  }
+
+  if (!imagePath || isBackupPath(imagePath) || isOcrTempPath(imagePath)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ที่ไม่ต้องประมวลผล", path: imagePath },
+    };
+  }
+
+  if (isGeneratedPath(imagePath)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ที่โปรแกรมสร้างขึ้นเอง", path: imagePath },
+    };
+  }
+
+  const ext = path.extname(imagePath).toLowerCase();
+  if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+    return {
+      type: "skipped",
+      item: { reason: "นามสกุลไฟล์ไม่รองรับ", path: imagePath },
+    };
+  }
+
+  const imageFile = {
+    name: path.basename(imagePath),
+    path: imagePath,
+  };
+
+  const nameWithoutExt = path.parse(imageFile.name).name;
+
+  if (isLikelyVendor2ProcessedFile(nameWithoutExt)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์น่าจะถูก rename แล้ว", path: imagePath },
+    };
+  }
+
+  const backupPath = path.join(reportRootPath, "Backup");
+  if (!fs.existsSync(backupPath)) {
+    fs.mkdirSync(backupPath, { recursive: true });
+  }
+
+  let tempOcrFile = null;
+
+  try {
+    await new Promise((r) => setTimeout(r, 800));
+
+    const buffer = fs.readFileSync(imageFile.path);
+    const { width, height } = imageSize(buffer);
+
+    const cropArea = {
+      left: 0,
+      top: Math.floor(height * 0.09),
+      width: Math.floor(width * 0.15),
+      height: Math.floor(height * 0.04),
+    };
+
+    tempOcrFile = imageFile.path + "_ocr.jpg";
+
+    await sharp(imageFile.path)
+      .extract(cropArea)
+      .resize(Math.max(1, cropArea.width * 10), Math.max(1, cropArea.height * 10))
+      .grayscale()
+      .normalize()
+      .sharpen({ sigma: 2.5 })
+      .modulate({ contrast: 10, brightness: 0.2 })
+      .negate()
+      .toFile(tempOcrFile);
+
+    const ocr = await runOCR(tempOcrFile);
+    const text = ocr?.data?.text || "";
+
+    let hn = extractHN(text);
+    hn = normalizeHN(hn);
+
+    if (!hn) {
+      return {
+        type: "skipped",
+        item: {
+          reason: "OCR หา HN ไม่พบ",
+          path: imageFile.path,
+          ocrPreview: text.slice(0, 100),
+        },
+      };
+    }
+
+    const backupFile = path.join(backupPath, imageFile.name);
+    if (!fs.existsSync(backupFile)) {
+      fs.copyFileSync(imageFile.path, backupFile);
+    }
+
+    const result = renameUsingHN(reportRootPath, imageFile, hn, {
+      ocrPreview: text.slice(0, 100),
+    });
+
+    if (result.type === "renamed") {
+      return result;
+    }
+
+    return {
+      type: "skipped",
+      item: result.item,
+    };
+  } catch (err) {
+    return {
+      type: "skipped",
+      item: {
+        reason: err.message,
+        path: imageFile.path,
+      },
+    };
+  } finally {
+    if (tempOcrFile) {
+      await safeUnlink(tempOcrFile);
+    }
+  }
+}
+
+async function processVendor1ImageFile(reportRootPath, imagePath) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    throw new Error("ไม่พบโฟลเดอร์ root");
+  }
+
+  if (!imagePath || isBackupPath(imagePath) || isOcrTempPath(imagePath)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ที่ไม่ต้องประมวลผล", path: imagePath },
+    };
+  }
+
+  if (isGeneratedPath(imagePath)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ที่โปรแกรมสร้างขึ้นเอง", path: imagePath },
+    };
+  }
+
+  const ext = path.extname(imagePath).toLowerCase();
+  if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+    return {
+      type: "skipped",
+      item: { reason: "นามสกุลไฟล์ไม่รองรับ", path: imagePath },
+    };
+  }
+
+  const ctx = resolveVendor1ContextFromFilePath(reportRootPath, imagePath);
+  if (!ctx) {
+    return {
+      type: "skipped",
+      item: { reason: "โครงสร้างโฟลเดอร์ไม่ถูกต้อง", path: imagePath },
+    };
+  }
+
+  const hn = normalizeHN(ctx.hnFolderName.trim()) || ctx.hnFolderName.trim();
+
+  const imageFile = {
+    name: path.basename(imagePath),
+    path: imagePath,
+  };
+
+  const nameWithoutExt = path.parse(imageFile.name).name;
+  if (isAlreadyTargetFile(nameWithoutExt, hn)) {
+    return {
+      type: "skipped",
+      item: { reason: "ชื่อไฟล์ตรงกับ HN แล้ว", path: imageFile.path },
+    };
+  }
+
+  const backupPath = path.join(ctx.petFolderPath, "Backup");
+  if (!fs.existsSync(backupPath)) {
+    fs.mkdirSync(backupPath, { recursive: true });
+  }
+
+  try {
+    const backupFile = path.join(backupPath, imageFile.name);
+    if (!fs.existsSync(backupFile)) {
+      fs.copyFileSync(imageFile.path, backupFile);
+    }
+
+    const result = renameUsingHN(ctx.petFolderPath, imageFile, hn, {
+      dateFolder: ctx.dateFolderName,
+      petFolder: ctx.petFolderName,
+    });
+
+    if (result.type === "renamed") {
+      return result;
+    }
+
+    return {
+      type: "skipped",
+      item: result.item,
+    };
+  } catch (err) {
+    return {
+      type: "skipped",
+      item: {
+        reason: err.message,
+        path: imageFile.path,
+      },
+    };
+  }
 }
 
 async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
@@ -209,14 +526,11 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   }
 
   const backupPath = path.join(reportRootPath, "Backup");
-
   if (!fs.existsSync(backupPath)) {
     fs.mkdirSync(backupPath, { recursive: true });
   }
 
   let imageFiles = [];
-
-  // ถ้ามีไฟล์ที่ส่งมาเฉพาะ
   if (specificFile) {
     imageFiles.push({
       name: path.basename(specificFile),
@@ -225,8 +539,9 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   } else {
     imageFiles = getImageFiles(reportRootPath).filter(
       (file) =>
-        !file.path.includes("Backup") &&
-        !file.name.includes("_ocr")
+        !isBackupPath(file.path) &&
+        !isOcrTempPath(file.path) &&
+        !isGeneratedPath(file.path),
     );
   }
 
@@ -234,81 +549,12 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   const skippedItems = [];
 
   for (const imageFile of imageFiles) {
-    const nameWithoutExt = path.parse(imageFile.name).name;
+    const result = await processVendor2ImageFile(reportRootPath, imageFile.path);
 
-    // ข้ามไฟล์ที่ rename แล้ว
-    if (/^[A-Z0-9]+$/.test(nameWithoutExt) && nameWithoutExt.length >= 4) {
-      continue;
-    }
-
-    let tempOcrFile = null;
-
-    try {
-      // รอไฟล์เขียนเสร็จ
-      await new Promise((r) => setTimeout(r, 800));
-
-      const buffer = fs.readFileSync(imageFile.path);
-
-      const { width, height } = imageSize(buffer);
-
-      const cropArea = {
-        left: 0,
-        top: Math.floor(height * 0.09),
-        width: Math.floor(width * 0.15),
-        height: Math.floor(height * 0.04),
-      };
-
-      tempOcrFile = imageFile.path + "_ocr.jpg";
-
-      await sharp(imageFile.path)
-        .extract(cropArea)
-        .resize(cropArea.width * 10, cropArea.height * 10)
-        .grayscale()
-        .normalize()
-        .sharpen({ sigma: 2.5 })
-        .modulate({ contrast: 10, brightness: 0.2 })
-        .negate()
-        .toFile(tempOcrFile);
-
-      const ocr = await runOCR(tempOcrFile);
-      const text = ocr?.data?.text || "";
-
-      let hn = extractHN(text);
-      hn = normalizeHN(hn);
-
-      if (!hn) {
-        skippedItems.push({
-          reason: "OCR หา HN ไม่พบ",
-          path: imageFile.path,
-          ocrPreview: text.slice(0, 100),
-        });
-        continue;
-      }
-
-      const backupFile = path.join(backupPath, imageFile.name);
-
-      if (!fs.existsSync(backupFile)) {
-        fs.copyFileSync(imageFile.path, backupFile);
-      }
-
-      const result = renameUsingHN(reportRootPath, imageFile, hn, {
-        ocrPreview: text.slice(0, 100),
-      });
-
-      if (result.type === "renamed") {
-        renamedItems.push(result.item);
-      } else {
-        skippedItems.push(result.item);
-      }
-    } catch (err) {
-      skippedItems.push({
-        reason: err.message,
-        path: imageFile.path,
-      });
-    } finally {
-      if (tempOcrFile) {
-        await safeUnlink(tempOcrFile);
-      }
+    if (result.type === "renamed") {
+      renamedItems.push(result.item);
+    } else if (result.item) {
+      skippedItems.push(result.item);
     }
   }
 
@@ -322,30 +568,42 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   };
 }
 
-async function renameVendor1XrayFiles(reportRootPath) {
+async function renameVendor1XrayFiles(reportRootPath, specificFile = null) {
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
 
-  const dateFolders = getDirectories(reportRootPath);
   const renamedItems = [];
   const skippedItems = [];
 
+  if (specificFile) {
+    const result = await processVendor1ImageFile(reportRootPath, specificFile);
+
+    if (result.type === "renamed") {
+      renamedItems.push(result.item);
+    } else if (result.item) {
+      skippedItems.push(result.item);
+    }
+
+    return {
+      mode: "vendor1",
+      reportRootPath,
+      renamedItems,
+      skippedItems,
+    };
+  }
+
+  const dateFolders = getDirectories(reportRootPath);
+
   for (const dateFolder of dateFolders) {
-    const hnFolders = getDirectories(dateFolder.path);
+    const hnFolders = getDirectories(dateFolder.path).filter(
+      (folder) => folder.name !== "Backup",
+    );
 
     for (const hnFolder of hnFolders) {
-      const hn = hnFolder.name.trim();
-
-      if (!hn) {
-        skippedItems.push({
-          reason: "ชื่อโฟลเดอร์ HN ว่างเปล่า",
-          path: hnFolder.path,
-        });
-        continue;
-      }
-
-      const petFolders = getDirectories(hnFolder.path);
+      const petFolders = getDirectories(hnFolder.path).filter(
+        (folder) => folder.name !== "Backup",
+      );
 
       if (petFolders.length === 0) {
         skippedItems.push({
@@ -356,13 +614,9 @@ async function renameVendor1XrayFiles(reportRootPath) {
       }
 
       for (const petFolder of petFolders) {
-        const backupPath = path.join(petFolder.path, "Backup");
-
-        if (!fs.existsSync(backupPath)) {
-          fs.mkdirSync(backupPath, { recursive: true });
-        }
-
-        const imageFiles = getImageFiles(petFolder.path);
+        const imageFiles = getImageFiles(petFolder.path).filter(
+          (file) => !isBackupPath(file.path) && !isOcrTempPath(file.path),
+        );
 
         if (imageFiles.length === 0) {
           skippedItems.push({
@@ -373,35 +627,14 @@ async function renameVendor1XrayFiles(reportRootPath) {
         }
 
         for (const imageFile of imageFiles) {
-          // ไม่เอาไฟล์ใน Backup
-          if (imageFile.path.includes("Backup")) continue;
-
-          try {
-            const extension = path.extname(imageFile.name);
-
-            const uniqueBackup = buildUniqueFilePath(
-              backupPath,
-              path.parse(imageFile.name).name,
-              extension,
-            );
-
-            fs.copyFileSync(imageFile.path, uniqueBackup.fullPath);
-          } catch (err) {
-            skippedItems.push({
-              reason: `Backup ล้มเหลว: ${err.message}`,
-              path: imageFile.path,
-            });
-            continue;
-          }
-
-          const result = renameUsingHN(petFolder.path, imageFile, hn, {
-            dateFolder: dateFolder.name,
-            petFolder: petFolder.name,
-          });
+          const result = await processVendor1ImageFile(
+            reportRootPath,
+            imageFile.path,
+          );
 
           if (result.type === "renamed") {
             renamedItems.push(result.item);
-          } else {
+          } else if (result.item) {
             skippedItems.push(result.item);
           }
         }
@@ -434,27 +667,31 @@ function detectVendorType(reportRootPath) {
     return null;
   }
 
-  // ตรวจสอบ vendor2: ไฟล์ภาพในระดับ root โดยตรง
-  const rootImages = getImageFiles(reportRootPath);
+  const rootImages = getImageFiles(reportRootPath).filter(
+    (file) => !isBackupPath(file.path) && !isOcrTempPath(file.path),
+  );
   if (rootImages.length > 0) {
     return "vendor2";
   }
 
-  // ตรวจสอบ vendor1: โครงสร้าง date folders → HN folders → image files
   const topLevelDirs = getDirectories(reportRootPath);
 
-  // ถ้ามี folder ที่ดูเหมือน date format
   for (const dir of topLevelDirs) {
-    const subDirs = getDirectories(dir.path);
+    const subDirs = getDirectories(dir.path).filter(
+      (folder) => folder.name !== "Backup",
+    );
 
-    // vendor1 ต้องมี HN folders อย่างน้อย 1 folder
     if (subDirs.length > 0) {
       for (const subDir of subDirs) {
-        const petFolders = getDirectories(subDir.path);
-        // ถ้า HN folder มี pet folders
+        const petFolders = getDirectories(subDir.path).filter(
+          (folder) => folder.name !== "Backup",
+        );
+
         if (petFolders.length > 0) {
           for (const petFolder of petFolders) {
-            const images = getImageFiles(petFolder.path);
+            const images = getImageFiles(petFolder.path).filter(
+              (file) => !isBackupPath(file.path) && !isOcrTempPath(file.path),
+            );
             if (images.length > 0) {
               return "vendor1";
             }
@@ -464,21 +701,16 @@ function detectVendorType(reportRootPath) {
     }
   }
 
-  // ไม่สามารถตรวจสอบได้
   return null;
 }
 
-function startWatchingFolder(reportRootPath) {
-  // ปิด watcher เก่าก่อน
-  if (folderWatcher) {
-    folderWatcher.close();
-  }
+async function startWatchingFolder(reportRootPath) {
+  await closeFolderWatcher();
 
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     return;
   }
 
-  // ตรวจสอบ vendor type ล่วงหน้า
   let vendorType = detectVendorType(reportRootPath);
 
   folderWatcher = chokidar.watch(reportRootPath, {
@@ -491,42 +723,60 @@ function startWatchingFolder(reportRootPath) {
     },
   });
 
-  folderWatcher.on("add", async (filePath) => {
-    if (filePath.includes("Backup")) return;
-    if (filePath.includes("_ocr")) return;
+  folderWatcher.on("add", (filePath) => {
+    enqueueTask(async () => {
+      if (isGeneratedPath(filePath)) return;
+      if (isBackupPath(filePath)) return;
+      if (isOcrTempPath(filePath)) return;
 
-    const ext = path.extname(filePath).toLowerCase();
-    if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
-      return;
-    }
-
-    // ตรวจสอบ vendor type ใหม่ทุกครั้ง (เผื่อโครงสร้างเปลี่ยน)
-    vendorType = detectVendorType(reportRootPath);
-
-    try {
-      if (vendorType === "vendor2") {
-        // เปลี่ยนชื่อและ backup ทันที
-        await renameVendor2XrayFiles(reportRootPath, filePath);
-      } else if (vendorType === "vendor1") {
-        await renameVendor1XrayFiles(reportRootPath);
+      const ext = path.extname(filePath).toLowerCase();
+      if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+        return;
       }
-    } catch (err) {
-      // log error
-      console.warn("Auto-rename error:", err.message);
-    }
 
-    // ส่ง event ไปยัง renderer process
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("new-image-detected", {
-        folderPath: reportRootPath,
-        fileName: path.basename(filePath),
-        filePath,
-      });
-    }
+      vendorType = detectVendorType(reportRootPath);
+
+      try {
+        if (vendorType === "vendor2") {
+          await renameVendor2XrayFiles(reportRootPath, filePath);
+        } else if (vendorType === "vendor1") {
+          await renameVendor1XrayFiles(reportRootPath, filePath);
+        }
+      } catch (err) {
+        console.warn("Auto-rename error:", err.message);
+      }
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("new-image-detected", {
+          folderPath: reportRootPath,
+          fileName: path.basename(filePath),
+          filePath,
+        });
+      }
+    });
   });
 }
 
+function showMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+    return mainWindow;
+  }
+
+  return createWindow();
+}
+
 function createWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+    return mainWindow;
+  }
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 860,
@@ -540,9 +790,19 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "index.html"));
 
   mainWindow.on("close", (event) => {
+    if (isQuitting) {
+      return;
+    }
+
     event.preventDefault();
     mainWindow.hide();
   });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
+  return mainWindow;
 }
 
 ipcMain.handle("select-report-folder", async () => {
@@ -551,10 +811,10 @@ ipcMain.handle("select-report-folder", async () => {
   });
 
   if (result.canceled) return null;
-  const folderPath = result.filePaths[0];
 
-  // ตรวจสอบ vendor type และเปลี่ยนชื่อทันที
+  const folderPath = result.filePaths[0];
   const vendorType = detectVendorType(folderPath);
+
   try {
     if (vendorType === "vendor2") {
       await renameVendor2XrayFiles(folderPath);
@@ -562,9 +822,9 @@ ipcMain.handle("select-report-folder", async () => {
       await renameVendor1XrayFiles(folderPath);
     }
   } catch (err) {
-    // log error
     console.warn("Auto-rename on select error:", err.message);
   }
+
   return folderPath;
 });
 
@@ -577,48 +837,56 @@ ipcMain.handle("detect-vendor-type", async (_event, reportRootPath) => {
 });
 
 ipcMain.handle("start-watching-folder", async (_event, reportRootPath) => {
-  startWatchingFolder(reportRootPath);
+  await startWatchingFolder(reportRootPath);
   return true;
 });
 
 ipcMain.handle("stop-watching-folder", async () => {
-  if (folderWatcher) {
-    folderWatcher.close();
-    folderWatcher = null;
-  }
+  await closeFolderWatcher();
   return true;
 });
 
 app.whenReady().then(() => {
   createWindow();
 
-  tray = new Tray(path.join(__dirname, "x-ray.png"));
+  try {
+    tray = new Tray(path.join(__dirname, "x-ray.png"));
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: "เปิดโปรแกรม",
-      click: () => {
-        createWindow();
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: "เปิดโปรแกรม",
+        click: () => {
+          showMainWindow();
+        },
       },
-    },
-    {
-      label: "ออกจากโปรแกรม",
-      click: () => {
-        app.quit();
+      {
+        label: "ออกจากโปรแกรม",
+        click: async () => {
+          isQuitting = true;
+          await closeFolderWatcher();
+          app.quit();
+        },
       },
-    },
-  ]);
+    ]);
 
-  tray.setToolTip("Xray Renamer");
-  tray.setContextMenu(contextMenu);
+    tray.setToolTip("Xray Renamer");
+    tray.setContextMenu(contextMenu);
+    tray.on("click", () => {
+      showMainWindow();
+    });
+  } catch (err) {
+    console.warn("Tray initialization failed:", err.message);
+  }
+});
+
+app.on("before-quit", async () => {
+  isQuitting = true;
+  await closeFolderWatcher();
 });
 
 app.on("window-all-closed", (e) => {
-  e.preventDefault();
-
-  // ปิด watcher
-  if (folderWatcher) {
-    folderWatcher.close();
-    folderWatcher = null;
+  if (!isQuitting) {
+    e.preventDefault();
+    return;
   }
 });
