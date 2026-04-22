@@ -270,8 +270,8 @@
       <section class="card hero">
         <h1>โปรแกรมเปลี่ยนชื่อไฟล์ Xray ตาม HN</h1>
         <p>
-          เลือกโฟลเดอร์ root เพียงครั้งเดียว แล้วโปรแกรมจะตรวจจับประเภทอัตโนมัติ
-          จากนั้นเฝ้าดูไฟล์ใหม่และเปลี่ยนชื่อให้เอง
+          เลือกโฟลเดอร์หลักเพียงครั้งเดียว แล้วโปรแกรมจะสแกนและเฝ้าดูไฟล์ใหม่ให้อัตโนมัติ
+          ระบบนี้แยกอ่านรูปทีละไฟล์ได้ ไม่ยึดค่ายทั้งโฟลเดอร์
         </p>
         <div class="mode-chip">
           <span id="watchDot" class="dot idle"></span>
@@ -281,10 +281,10 @@
 
       <section class="card stack">
         <div class="row">
-          <button id="selectFolderButton" class="primary">เลือกโฟลเดอร์</button>
-          <button id="rescanButton" class="secondary" disabled>สแกนใหม่</button>
+          <button id="selectFolderButton" class="primary">เลือกโฟลเดอร์หลัก</button>
+          <button id="rescanButton" class="secondary" disabled>สแกนใหม่ทั้งโฟลเดอร์</button>
           <button id="stopWatchButton" class="danger" disabled>หยุดเฝ้าดู</button>
-          <button id="clearLogButton" class="secondary">ล้างรายการ</button>
+          <button id="clearLogButton" class="secondary">ล้างบันทึก</button>
         </div>
 
         <div class="grid-2">
@@ -294,7 +294,7 @@
           </div>
 
           <div class="path-box">
-            <div class="muted">ประเภทที่ตรวจพบ</div>
+            <div class="muted">โครงสร้างที่ตรวจพบ</div>
             <code id="detectedMode">-</code>
           </div>
         </div>
@@ -303,8 +303,17 @@
       </section>
 
       <section class="card stack">
-        <h2>วิธีใช้ที่ถูกต้อง</h2>
+        <h2>วิธีใช้</h2>
         <ol id="stepsList" class="steps"></ol>
+
+        <div class="helper">
+          <div class="muted">โครงสร้างตัวอย่าง</div>
+          <div id="structureHint">-</div>
+          <div class="muted" style="margin-top: 10px">
+            หมายเหตุ: โปรแกรมจะดูทีละรูป แล้วเลือกวิธี rename ให้เอง
+          </div>
+        </div>
+
         <div class="note">
           <strong>ตำแหน่ง Backup</strong>
           <div class="muted" id="backupHint">-</div>
@@ -315,7 +324,7 @@
         <h2>สรุปผลล่าสุด</h2>
         <div class="grid-3">
           <div class="metric">
-            <div class="muted" id="metricOneLabel">จำนวนไฟล์ล่าสุดที่ตรวจพบ</div>
+            <div class="muted" id="metricOneLabel">จำนวนไฟล์ที่สแกนล่าสุด</div>
             <strong id="metricOneValue">0</strong>
           </div>
           <div class="metric">
@@ -332,7 +341,7 @@
       <section class="card">
         <div class="log-head">
           <h2>รายการไฟล์ที่เปลี่ยนชื่อ</h2>
-          <span class="muted">ดูผลจากการสแกนล่าสุด</span>
+          <span class="muted">ผลจากการสแกนล่าสุด</span>
         </div>
         <ul id="renamedList" class="list"></ul>
       </section>
@@ -340,7 +349,7 @@
       <section class="card">
         <div class="log-head">
           <h2>รายการที่ข้าม</h2>
-          <span class="muted">ไฟล์ที่ OCR ไม่พบ / ไฟล์เดิม / ไฟล์ระบบ</span>
+          <span class="muted">ไฟล์เดิม / OCR ไม่พบ / ไฟล์ระบบ</span>
         </div>
         <ul id="skippedList" class="list"></ul>
       </section>
@@ -373,14 +382,11 @@
       const watchText = document.getElementById("watchText");
       const metricOneLabel = document.getElementById("metricOneLabel");
       const metricOneValue = document.getElementById("metricOneValue");
+      const structureHint = document.getElementById("structureHint");
 
       let currentReportPath = "";
       let detectedVendor = null;
-      let latestResult = {
-        renamedItems: [],
-        skippedItems: [],
-        imageFileCount: 0,
-      };
+      let watchingActive = false;
 
       function setStatus(message, type = "info") {
         statusBox.textContent = message;
@@ -388,9 +394,15 @@
       }
 
       function setWatchState(active, text) {
+        watchingActive = active;
         watchDot.className = active ? "dot active" : "dot idle";
         watchText.textContent = text;
         stopWatchButton.disabled = !active;
+      }
+
+      function syncButtons() {
+        rescanButton.disabled = !currentReportPath;
+        stopWatchButton.disabled = !watchingActive;
       }
 
       function saveLastPath(folderPath) {
@@ -410,11 +422,6 @@
         while (eventList.children.length > 20) {
           eventList.removeChild(eventList.lastChild);
         }
-      }
-
-      function clearLists() {
-        renamedList.innerHTML = "";
-        skippedList.innerHTML = "";
       }
 
       function renderList(element, items, type) {
@@ -437,21 +444,21 @@
       }
 
       function renderSteps(vendor) {
-        const steps = [];
-
-        steps.push("เลือกโฟลเดอร์ root ของงาน");
-        steps.push("โปรแกรมจะตรวจจับประเภทอัตโนมัติและเริ่มเฝ้าดูไฟล์ใหม่");
-        steps.push("อย่าเอาไฟล์ Backup หรือไฟล์ _ocr ไปวางปะปนในโฟลเดอร์ต้นทาง");
-        steps.push("ถ้าต้องการบังคับตรวจทั้งโฟลเดอร์อีกครั้ง ให้กดปุ่ม สแกนใหม่");
+        const steps = [
+          "กดเลือกโฟลเดอร์หลักของงาน",
+          "รอโปรแกรมสแกนรอบแรกให้เสร็จ",
+          "จากนั้นวางรูปใหม่เข้าไปในโฟลเดอร์เดิมได้เลย",
+          "ถ้ามีไฟล์เก่าค้างอยู่ ให้กดสแกนใหม่ทั้งโฟลเดอร์",
+        ];
 
         if (vendor === "vendor1") {
-          steps.push("โครงสร้างที่ถูกต้องคือ root / วันที่ / HN / ชื่อสัตว์ / รูป");
-          steps.push("Backup จะอยู่ในโฟลเดอร์ชื่อสัตว์ เช่น root/date/HN/pet/Backup");
+          steps.push("โฟลเดอร์ค่าย 1 ใช้รูปแบบ root / วันที่ / HN / ชื่อสัตว์ / รูป");
         } else if (vendor === "vendor2") {
-          steps.push("โครงสร้างที่ถูกต้องคือ root / รูป");
-          steps.push("Backup จะอยู่ใน root/Backup");
+          steps.push("โฟลเดอร์ค่าย 2 ใช้รูปแบบ root / รูป");
+        } else if (vendor === "mixed") {
+          steps.push("โฟลเดอร์นี้มีทั้งค่าย 1 และค่าย 2 ปนกัน โปรแกรมแยกให้เอง");
         } else {
-          steps.push("ถ้ายังไม่พบประเภท โปรแกรมจะรอไฟล์ภาพจริงก่อน");
+          steps.push("ถ้ายังไม่พบโครงสร้าง โปรแกรมจะรอไฟล์ภาพจริงก่อน");
         }
 
         stepsList.innerHTML = "";
@@ -464,20 +471,26 @@
 
       function setBackupHint(vendor) {
         if (vendor === "vendor1") {
-          backupHint.textContent = "vendor1: Backup อยู่ในโฟลเดอร์ pet ของแต่ละ HN";
+          backupHint.textContent = "Backup ของค่าย 1 จะอยู่ในโฟลเดอร์ pet ของแต่ละ HN";
+          structureHint.textContent = "root / วันที่ / HN / ชื่อสัตว์ / รูป";
         } else if (vendor === "vendor2") {
-          backupHint.textContent = "vendor2: Backup อยู่ที่ root ของโฟลเดอร์ที่เลือก";
+          backupHint.textContent = "Backup ของค่าย 2 จะอยู่ที่ root/Backup";
+          structureHint.textContent = "root / รูป";
+        } else if (vendor === "mixed") {
+          backupHint.textContent = "ค่าย 1 เก็บใน pet/Backup ส่วนค่าย 2 เก็บใน root/Backup";
+          structureHint.textContent = "มีทั้ง root/รูป และ root/วันที่/HN/ชื่อสัตว์/รูป";
         } else {
-          backupHint.textContent = "ยังไม่พบประเภทโฟลเดอร์";
+          backupHint.textContent = "-";
+          structureHint.textContent = "-";
         }
       }
 
-      function formatRenamedItem(item, mode) {
-        if (mode === "vendor2") {
-          return `${item.oldName} → ${item.newName} (HN: ${item.hn})`;
+      function formatRenamedItem(item) {
+        if (item.mode === "vendor1") {
+          return `[${item.dateFolder || "-"} / ${item.hn} / ${item.petFolder || "-"}] ${item.oldName} → ${item.newName}`;
         }
 
-        return `[${item.dateFolder} / ${item.hn} / ${item.petFolder}] ${item.oldName} → ${item.newName}`;
+        return `${item.oldName} → ${item.newName} (HN: ${item.hn})`;
       }
 
       function formatSkippedItem(item) {
@@ -486,32 +499,20 @@
       }
 
       function updateSummary(result) {
-        latestResult = {
-          renamedItems: result?.renamedItems || [],
-          skippedItems: result?.skippedItems || [],
-          imageFileCount: result?.imageFileCount || 0,
-        };
-
-        const mode = result?.mode || detectedVendor || "vendor2";
-
-        metricOneLabel.textContent =
-          mode === "vendor1"
-            ? "จำนวนไฟล์ล่าสุดที่สแกน"
-            : "จำนวนไฟล์ล่าสุดที่ตรวจพบ";
-
-        metricOneValue.textContent = String(latestResult.imageFileCount || 0);
-        renamedCount.textContent = String(latestResult.renamedItems.length || 0);
-        skippedCount.textContent = String(latestResult.skippedItems.length || 0);
+        metricOneLabel.textContent = "จำนวนไฟล์ที่สแกนล่าสุด";
+        metricOneValue.textContent = String(result?.imageFileCount || 0);
+        renamedCount.textContent = String(result?.renamedItems?.length || 0);
+        skippedCount.textContent = String(result?.skippedItems?.length || 0);
 
         renderList(
           renamedList,
-          latestResult.renamedItems.map((item) => formatRenamedItem(item, mode)),
+          (result?.renamedItems || []).map((item) => formatRenamedItem(item)),
           "renamed",
         );
 
         renderList(
           skippedList,
-          latestResult.skippedItems.map((item) => formatSkippedItem(item)),
+          (result?.skippedItems || []).map((item) => formatSkippedItem(item)),
           "skipped",
         );
       }
@@ -524,7 +525,9 @@
             ? "ค่าย 1"
             : vendor === "vendor2"
               ? "ค่าย 2"
-              : "-";
+              : vendor === "mixed"
+                ? "ค่าย 1 + ค่าย 2"
+                : "-";
 
         renderSteps(vendor);
         setBackupHint(vendor);
@@ -534,14 +537,16 @@
         if (!folderPath) return;
         await api.startWatchingFolder(folderPath);
         setWatchState(true, "กำลังเฝ้าดูโฟลเดอร์อยู่");
+        syncButtons();
       }
 
       async function stopWatching() {
         await api.stopWatchingFolder();
         setWatchState(false, "หยุดเฝ้าดูโฟลเดอร์แล้ว");
+        syncButtons();
       }
 
-      async function openFolder(folderPath) {
+      async function openFolder(folderPath, doRescan = true) {
         currentReportPath = folderPath;
         selectedPath.textContent = folderPath;
         saveLastPath(folderPath);
@@ -549,8 +554,30 @@
         await refreshVendorAndUI(folderPath);
         await startWatching(folderPath);
 
-        setStatus("เลือกโฟลเดอร์สำเร็จ และเริ่มเฝ้าดูไฟล์ใหม่แล้ว", "success");
-        appendEvent(`เลือกโฟลเดอร์: ${folderPath}`, "success");
+        if (doRescan) {
+          setStatus("กำลังสแกนไฟล์ที่มีอยู่ในโฟลเดอร์...", "info");
+          appendEvent(`เริ่มสแกนโฟลเดอร์: ${folderPath}`, "info");
+
+          const result = await api.renameXrayFiles({
+            mode: "auto",
+            reportRootPath: folderPath,
+          });
+
+          updateSummary(result);
+          setStatus(
+            `สแกนเสร็จสิ้น: เปลี่ยนชื่อ ${result.renamedItems.length} ไฟล์ และข้าม ${result.skippedItems.length} รายการ`,
+            "success",
+          );
+          appendEvent(
+            `สแกนเสร็จ: renamed=${result.renamedItems.length}, skipped=${result.skippedItems.length}`,
+            "success",
+          );
+        } else {
+          setStatus("โหลดโฟลเดอร์ล่าสุดสำเร็จ และเริ่มเฝ้าดูไฟล์ใหม่แล้ว", "success");
+          appendEvent(`โหลดโฟลเดอร์ล่าสุด: ${folderPath}`, "success");
+        }
+
+        syncButtons();
       }
 
       selectFolderButton.addEventListener("click", async () => {
@@ -565,7 +592,7 @@
             return;
           }
 
-          await openFolder(folderPath);
+          await openFolder(folderPath, true);
         } catch (error) {
           setStatus(`เกิดข้อผิดพลาดในการเลือกโฟลเดอร์: ${error.message}`, "error");
           appendEvent(`ผิดพลาด: ${error.message}`, "skipped");
@@ -573,7 +600,7 @@
       });
 
       rescanButton.addEventListener("click", async () => {
-        if (!currentReportPath || !detectedVendor) {
+        if (!currentReportPath) {
           setStatus("ยังไม่ได้เลือกโฟลเดอร์", "warning");
           return;
         }
@@ -584,13 +611,13 @@
 
         try {
           const result = await api.renameXrayFiles({
-            mode: detectedVendor,
+            mode: "auto",
             reportRootPath: currentReportPath,
           });
 
           updateSummary(result);
           setStatus(
-            `สแกนเสร็จสิ้น: เปลี่ยนชื่อ ${result.renamedItems.length} ไฟล์, ข้าม ${result.skippedItems.length} รายการ`,
+            `สแกนเสร็จสิ้น: เปลี่ยนชื่อ ${result.renamedItems.length} ไฟล์ และข้าม ${result.skippedItems.length} รายการ`,
             "success",
           );
           appendEvent(
@@ -601,7 +628,7 @@
           setStatus(`เกิดข้อผิดพลาด: ${error.message}`, "error");
           appendEvent(`สแกนล้มเหลว: ${error.message}`, "skipped");
         } finally {
-          rescanButton.disabled = false;
+          syncButtons();
         }
       });
 
@@ -619,7 +646,7 @@
       });
 
       if (api?.onNewImageDetected) {
-        api.onNewImageDetected(async (data) => {
+        api.onNewImageDetected((data) => {
           setStatus(`พบไฟล์ใหม่: ${data.fileName} — ระบบกำลังจัดการให้อัตโนมัติ`, "info");
           appendEvent(`พบไฟล์ใหม่: ${data.fileName}`, "info");
         });
@@ -631,6 +658,7 @@
           renderSteps(null);
           setBackupHint(null);
           setWatchState(false, "ยังไม่ได้เริ่มเฝ้าดูโฟลเดอร์");
+          syncButtons();
           return;
         }
 
@@ -640,13 +668,14 @@
         try {
           await refreshVendorAndUI(lastPath);
           await startWatching(lastPath);
-
           setStatus("โหลดโฟลเดอร์ล่าสุดสำเร็จ และเริ่มเฝ้าดูไฟล์ใหม่แล้ว", "success");
           appendEvent(`โหลดโฟลเดอร์ล่าสุด: ${lastPath}`, "success");
         } catch (error) {
           setStatus(`โหลดโฟลเดอร์ล่าสุดไม่สำเร็จ: ${error.message}`, "error");
           appendEvent(`โหลดโฟลเดอร์ล่าสุดล้มเหลว: ${error.message}`, "skipped");
         }
+
+        syncButtons();
       }
 
       (async function init() {
@@ -658,10 +687,10 @@
           return;
         }
 
-        clearLists();
         renderSteps(null);
         setBackupHint(null);
         setWatchState(false, "ยังไม่ได้เริ่มเฝ้าดูโฟลเดอร์");
+        syncButtons();
 
         await loadSavedPath();
       })();

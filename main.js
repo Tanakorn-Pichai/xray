@@ -9,6 +9,7 @@ const chokidar = require("chokidar");
 app.disableHardwareAcceleration();
 
 let tray = null;
+
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   ".jpg",
   ".jpeg",
@@ -25,6 +26,7 @@ let folderWatcher = null;
 let isQuitting = false;
 let processingQueue = Promise.resolve();
 const generatedPaths = new Set();
+const processingFiles = new Set();
 
 function isDirectory(targetPath) {
   try {
@@ -68,6 +70,44 @@ function getDirectories(targetPath) {
   }
 }
 
+function walkImageFilesRecursive(targetPath, collected = []) {
+  if (!isDirectory(targetPath)) {
+    return collected;
+  }
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(targetPath, { withFileTypes: true });
+  } catch {
+    return collected;
+  }
+
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) {
+      continue;
+    }
+
+    const fullPath = path.join(targetPath, entry.name);
+
+    if (entry.isDirectory()) {
+      if (entry.name === "Backup" || entry.name.includes("_ocr")) {
+        continue;
+      }
+      walkImageFilesRecursive(fullPath, collected);
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+        collected.push({
+          name: entry.name,
+          path: fullPath,
+        });
+      }
+    }
+  }
+
+  return collected;
+}
+
 function buildUniqueFilePath(directoryPath, desiredName, extension) {
   let candidateName = `${desiredName}${extension}`;
   let candidatePath = path.join(directoryPath, candidateName);
@@ -91,142 +131,6 @@ function normalizeHN(code) {
     .replace(/O/g, "0")
     .replace(/I/g, "1")
     .replace(/S/g, "5");
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isBackupPath(filePath) {
-  return filePath.split(path.sep).includes("Backup");
-}
-
-function isOcrTempPath(filePath) {
-  return String(filePath).toLowerCase().includes("_ocr");
-}
-
-function isGeneratedPath(filePath) {
-  return generatedPaths.has(path.resolve(filePath));
-}
-
-function markGeneratedPath(filePath) {
-  const resolved = path.resolve(filePath);
-  generatedPaths.add(resolved);
-
-  const timer = setTimeout(() => {
-    generatedPaths.delete(resolved);
-  }, 15000);
-
-  if (typeof timer.unref === "function") {
-    timer.unref();
-  }
-}
-
-function isAlreadyTargetFile(nameWithoutExt, hn) {
-  const normalizedName = normalizeHN(nameWithoutExt);
-  const normalizedHN = normalizeHN(hn);
-
-  if (!normalizedName || !normalizedHN) return false;
-
-  return (
-    normalizedName === normalizedHN ||
-    normalizedName.startsWith(`${normalizedHN}_`)
-  );
-}
-
-function isLikelyVendor2ProcessedFile(nameWithoutExt) {
-  const upper = String(nameWithoutExt).toUpperCase();
-
-  return /^[A-Z0-9]{4,}(?:_\d+)?$/.test(upper);
-}
-
-async function closeFolderWatcher() {
-  if (!folderWatcher) return;
-
-  const watcher = folderWatcher;
-  folderWatcher = null;
-
-  try {
-    await watcher.close();
-  } catch (err) {
-    console.warn("Failed to close watcher:", err.message);
-  }
-}
-
-async function enqueueTask(task) {
-  processingQueue = processingQueue
-    .then(task)
-    .catch((err) => {
-      console.warn("Processing error:", err.message);
-    });
-
-  return processingQueue;
-}
-
-function normalizePathSafe(targetPath) {
-  try {
-    return path.resolve(targetPath);
-  } catch {
-    return targetPath;
-  }
-}
-
-function resolveVendor1ContextFromFilePath(reportRootPath, imagePath) {
-  const root = normalizePathSafe(reportRootPath);
-  const file = normalizePathSafe(imagePath);
-
-  const relative = path.relative(root, file);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return null;
-  }
-
-  const parts = relative.split(path.sep);
-  if (parts.length < 4) {
-    return null;
-  }
-
-  const [dateFolderName, hnFolderName, petFolderName] = parts;
-  const dateFolderPath = path.join(root, dateFolderName);
-  const hnFolderPath = path.join(dateFolderPath, hnFolderName);
-  const petFolderPath = path.join(hnFolderPath, petFolderName);
-
-  if (
-    !isDirectory(dateFolderPath) ||
-    !isDirectory(hnFolderPath) ||
-    !isDirectory(petFolderPath)
-  ) {
-    return null;
-  }
-
-  return {
-    dateFolderName,
-    hnFolderName,
-    petFolderName,
-    dateFolderPath,
-    hnFolderPath,
-    petFolderPath,
-  };
-}
-
-async function safeUnlink(filePath, maxRetries = 3) {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-      return true;
-    } catch (err) {
-      if (i < maxRetries - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      } else {
-        console.warn(
-          `Failed to delete ${filePath} after ${maxRetries} retries:`,
-          err.message,
-        );
-      }
-    }
-  }
-  return false;
 }
 
 function extractNumericHN(rawText) {
@@ -271,6 +175,77 @@ function extractHN(rawText) {
   return line || null;
 }
 
+function isBackupPath(filePath) {
+  return filePath.split(path.sep).includes("Backup");
+}
+
+function isOcrTempPath(filePath) {
+  return String(filePath).toLowerCase().includes("_ocr");
+}
+
+function isGeneratedPath(filePath) {
+  return generatedPaths.has(path.resolve(filePath));
+}
+
+function markGeneratedPath(filePath) {
+  const resolved = path.resolve(filePath);
+  generatedPaths.add(resolved);
+
+  const timer = setTimeout(() => {
+    generatedPaths.delete(resolved);
+  }, 15000);
+
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
+}
+
+function isAlreadyTargetFile(nameWithoutExt, hn) {
+  const normalizedName = normalizeHN(nameWithoutExt);
+  const normalizedHN = normalizeHN(hn);
+
+  if (!normalizedName || !normalizedHN) return false;
+
+  return (
+    normalizedName === normalizedHN ||
+    normalizedName.startsWith(`${normalizedHN}_`)
+  );
+}
+
+function isLikelyVendor2ProcessedFile(nameWithoutExt) {
+  const upper = String(nameWithoutExt).toUpperCase();
+  return /^[A-Z0-9]{4,}(?:_\d+)?$/.test(upper);
+}
+
+function normalizePathSafe(targetPath) {
+  try {
+    return path.resolve(targetPath);
+  } catch {
+    return targetPath;
+  }
+}
+
+async function safeUnlink(filePath, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      return true;
+    } catch (err) {
+      if (i < maxRetries - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } else {
+        console.warn(
+          `Failed to delete ${filePath} after ${maxRetries} retries:`,
+          err.message,
+        );
+      }
+    }
+  }
+  return false;
+}
+
 async function runOCR(imagePath) {
   if (!fs.existsSync(imagePath)) {
     throw new Error(`ไฟล์ไม่พบ: ${imagePath}`);
@@ -285,6 +260,122 @@ async function runOCR(imagePath) {
   });
 }
 
+async function extractHnFromCrop(imagePath, cropArea, tempSuffix) {
+  let tempFile = null;
+
+  try {
+    tempFile = `${imagePath}${tempSuffix}`;
+
+    await sharp(imagePath)
+      .extract(cropArea)
+      .resize(
+        Math.max(1, cropArea.width * 10),
+        Math.max(1, cropArea.height * 10),
+      )
+      .grayscale()
+      .normalize()
+      .sharpen({ sigma: 2.5 })
+      .modulate({ contrast: 10, brightness: 0.2 })
+      .negate()
+      .toFile(tempFile);
+
+    const ocr = await runOCR(tempFile);
+    const text = ocr?.data?.text || "";
+
+    return {
+      hn: normalizeHN(extractHN(text) || extractNumericHN(text)),
+      text,
+    };
+  } finally {
+    if (tempFile) {
+      await safeUnlink(tempFile);
+    }
+  }
+}
+
+function resolveVendor1ContextFromFilePath(reportRootPath, imagePath) {
+  const root = normalizePathSafe(reportRootPath);
+  const file = normalizePathSafe(imagePath);
+
+  const relative = path.relative(root, file);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return null;
+  }
+
+  const parts = relative.split(path.sep);
+  if (parts.length < 4) {
+    return null;
+  }
+
+  const [dateFolderName, hnFolderName, petFolderName] = parts;
+  const dateFolderPath = path.join(root, dateFolderName);
+  const hnFolderPath = path.join(dateFolderPath, hnFolderName);
+  const petFolderPath = path.join(hnFolderPath, petFolderName);
+
+  if (
+    !isDirectory(dateFolderPath) ||
+    !isDirectory(hnFolderPath) ||
+    !isDirectory(petFolderPath)
+  ) {
+    return null;
+  }
+
+  return {
+    dateFolderName,
+    hnFolderName,
+    petFolderName,
+    dateFolderPath,
+    hnFolderPath,
+    petFolderPath,
+  };
+}
+
+function hasVendor1Structure(reportRootPath) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) return false;
+
+  const topLevelDirs = getDirectories(reportRootPath);
+  for (const dir of topLevelDirs) {
+    const subDirs = getDirectories(dir.path);
+    if (subDirs.length > 0) {
+      for (const subDir of subDirs) {
+        const petFolders = getDirectories(subDir.path);
+        if (petFolders.length > 0) {
+          for (const petFolder of petFolders) {
+            const images = getImageFiles(petFolder.path);
+            if (images.length > 0) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function hasRootImages(reportRootPath) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) return false;
+  return getImageFiles(reportRootPath).some(
+    (file) => !isBackupPath(file.path) && !isOcrTempPath(file.path),
+  );
+}
+
+function detectVendorType(reportRootPath) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    return null;
+  }
+
+  const rootImages = hasRootImages(reportRootPath);
+  const vendor1Structure = hasVendor1Structure(reportRootPath);
+
+  if (rootImages && vendor1Structure) return "mixed";
+  if (rootImages) return "vendor2";
+  if (vendor1Structure) return "vendor1";
+
+  return null;
+}
+
 function renameUsingHN(directoryPath, imageFile, hn, metadata = {}) {
   const extension = path.extname(imageFile.name);
   const nameWithoutExt = path.parse(imageFile.name).name;
@@ -292,7 +383,7 @@ function renameUsingHN(directoryPath, imageFile, hn, metadata = {}) {
   if (isAlreadyTargetFile(nameWithoutExt, hn)) {
     return {
       type: "skipped",
-      item: { reason: "ชื่อไฟล์ตรงกับรหัส DX แล้ว", path: imageFile.path },
+      item: { reason: "ชื่อไฟล์ตรงกับรหัสแล้ว", path: imageFile.path },
     };
   }
 
@@ -311,6 +402,88 @@ function renameUsingHN(directoryPath, imageFile, hn, metadata = {}) {
       ...metadata,
     },
   };
+}
+
+async function processVendor1ImageFileFromContext(
+  reportRootPath,
+  imagePath,
+  ctx,
+) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    throw new Error("ไม่พบโฟลเดอร์ root");
+  }
+
+  if (!imagePath || isBackupPath(imagePath) || isOcrTempPath(imagePath)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ที่ไม่ต้องประมวลผล", path: imagePath },
+    };
+  }
+
+  if (isGeneratedPath(imagePath)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ที่โปรแกรมสร้างขึ้นเอง", path: imagePath },
+    };
+  }
+
+  const ext = path.extname(imagePath).toLowerCase();
+  if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+    return {
+      type: "skipped",
+      item: { reason: "นามสกุลไฟล์ไม่รองรับ", path: imagePath },
+    };
+  }
+
+  const hn = normalizeHN(ctx.hnFolderName.trim()) || ctx.hnFolderName.trim();
+
+  const imageFile = {
+    name: path.basename(imagePath),
+    path: imagePath,
+  };
+
+  if (isAlreadyTargetFile(path.parse(imageFile.name).name, hn)) {
+    return {
+      type: "skipped",
+      item: { reason: "ชื่อไฟล์ตรงกับ HN แล้ว", path: imageFile.path },
+    };
+  }
+
+  const backupPath = path.join(ctx.petFolderPath, "Backup");
+  if (!fs.existsSync(backupPath)) {
+    fs.mkdirSync(backupPath, { recursive: true });
+  }
+
+  try {
+    const backupFile = path.join(backupPath, imageFile.name);
+    if (!fs.existsSync(backupFile)) {
+      fs.copyFileSync(imageFile.path, backupFile);
+      markGeneratedPath(backupFile);
+    }
+
+    const result = renameUsingHN(ctx.petFolderPath, imageFile, hn, {
+      mode: "vendor1",
+      dateFolder: ctx.dateFolderName,
+      petFolder: ctx.petFolderName,
+    });
+
+    if (result.type === "renamed") {
+      return result;
+    }
+
+    return {
+      type: "skipped",
+      item: result.item,
+    };
+  } catch (err) {
+    return {
+      type: "skipped",
+      item: {
+        reason: err.message,
+        path: imageFile.path,
+      },
+    };
+  }
 }
 
 async function processVendor2ImageFile(reportRootPath, imagePath) {
@@ -346,7 +519,6 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
   };
 
   const nameWithoutExt = path.parse(imageFile.name).name;
-
   if (isLikelyVendor2ProcessedFile(nameWithoutExt)) {
     return {
       type: "skipped",
@@ -370,27 +542,17 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
     const cropArea = {
       left: 0,
       top: Math.floor(height * 0.09),
-      width: Math.floor(width * 0.15),
-      height: Math.floor(height * 0.04),
+      width: Math.max(1, Math.floor(width * 0.15)),
+      height: Math.max(1, Math.floor(height * 0.04)),
     };
 
-    tempOcrFile = imageFile.path + "_ocr.jpg";
-
-    await sharp(imageFile.path)
-      .extract(cropArea)
-      .resize(Math.max(1, cropArea.width * 10), Math.max(1, cropArea.height * 10))
-      .grayscale()
-      .normalize()
-      .sharpen({ sigma: 2.5 })
-      .modulate({ contrast: 10, brightness: 0.2 })
-      .negate()
-      .toFile(tempOcrFile);
-
-    const ocr = await runOCR(tempOcrFile);
-    const text = ocr?.data?.text || "";
-
-    let hn = extractHN(text);
-    hn = normalizeHN(hn);
+    const extracted = await extractHnFromCrop(
+      imageFile.path,
+      cropArea,
+      "_vendor2_ocr.jpg",
+    );
+    const text = extracted.text;
+    let hn = extracted.hn;
 
     if (!hn) {
       return {
@@ -406,9 +568,11 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
     const backupFile = path.join(backupPath, imageFile.name);
     if (!fs.existsSync(backupFile)) {
       fs.copyFileSync(imageFile.path, backupFile);
+      markGeneratedPath(backupFile);
     }
 
-    const result = renameUsingHN(reportRootPath, imageFile, hn, {
+    const result = renameUsingHN(path.dirname(imageFile.path), imageFile, hn, {
+      mode: "vendor2",
       ocrPreview: text.slice(0, 100),
     });
 
@@ -435,7 +599,106 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
   }
 }
 
-async function processVendor1ImageFile(reportRootPath, imagePath) {
+async function processVendor1LikeImageByOCR(reportRootPath, imagePath) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    throw new Error("ไม่พบโฟลเดอร์ root");
+  }
+
+  if (!imagePath || isBackupPath(imagePath) || isOcrTempPath(imagePath)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ที่ไม่ต้องประมวลผล", path: imagePath },
+    };
+  }
+
+  if (isGeneratedPath(imagePath)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ที่โปรแกรมสร้างขึ้นเอง", path: imagePath },
+    };
+  }
+
+  const ext = path.extname(imagePath).toLowerCase();
+  if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+    return {
+      type: "skipped",
+      item: { reason: "นามสกุลไฟล์ไม่รองรับ", path: imagePath },
+    };
+  }
+
+  const imageFile = {
+    name: path.basename(imagePath),
+    path: imagePath,
+  };
+
+  const backupPath = path.join(reportRootPath, "Backup");
+  if (!fs.existsSync(backupPath)) {
+    fs.mkdirSync(backupPath, { recursive: true });
+  }
+
+  try {
+    const buffer = fs.readFileSync(imageFile.path);
+    const { width, height } = imageSize(buffer);
+
+    const cropArea = {
+      left: 0,
+      top: 0,
+      width: Math.max(1, Math.floor(width * 0.45)),
+      height: Math.max(1, Math.floor(height * 0.35)),
+    };
+
+    const extracted = await extractHnFromCrop(
+      imageFile.path,
+      cropArea,
+      "_fallback_ocr.jpg",
+    );
+
+    const text = extracted.text;
+    let hn = extracted.hn;
+
+    if (!hn) {
+      return {
+        type: "skipped",
+        item: {
+          reason: "OCR แบบค่าย 1 ไม่พบ HN",
+          path: imageFile.path,
+          ocrPreview: text.slice(0, 100),
+        },
+      };
+    }
+
+    const backupFile = path.join(backupPath, imageFile.name);
+    if (!fs.existsSync(backupFile)) {
+      fs.copyFileSync(imageFile.path, backupFile);
+      markGeneratedPath(backupFile);
+    }
+
+    const result = renameUsingHN(path.dirname(imageFile.path), imageFile, hn, {
+      mode: "vendor1",
+      source: "ocr-fallback",
+      ocrPreview: text.slice(0, 100),
+    });
+
+    if (result.type === "renamed") {
+      return result;
+    }
+
+    return {
+      type: "skipped",
+      item: result.item,
+    };
+  } catch (err) {
+    return {
+      type: "skipped",
+      item: {
+        reason: err.message,
+        path: imageFile.path,
+      },
+    };
+  }
+}
+
+async function processAutoImageFile(reportRootPath, imagePath) {
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
@@ -463,61 +726,125 @@ async function processVendor1ImageFile(reportRootPath, imagePath) {
   }
 
   const ctx = resolveVendor1ContextFromFilePath(reportRootPath, imagePath);
-  if (!ctx) {
-    return {
-      type: "skipped",
-      item: { reason: "โครงสร้างโฟลเดอร์ไม่ถูกต้อง", path: imagePath },
-    };
+  if (ctx) {
+    return processVendor1ImageFileFromContext(reportRootPath, imagePath, ctx);
   }
 
-  const hn = normalizeHN(ctx.hnFolderName.trim()) || ctx.hnFolderName.trim();
-
-  const imageFile = {
-    name: path.basename(imagePath),
-    path: imagePath,
-  };
-
-  const nameWithoutExt = path.parse(imageFile.name).name;
-  if (isAlreadyTargetFile(nameWithoutExt, hn)) {
-    return {
-      type: "skipped",
-      item: { reason: "ชื่อไฟล์ตรงกับ HN แล้ว", path: imageFile.path },
-    };
+  const vendor2Result = await processVendor2ImageFile(reportRootPath, imagePath);
+  if (vendor2Result.type === "renamed") {
+    return vendor2Result;
   }
 
-  const backupPath = path.join(ctx.petFolderPath, "Backup");
-  if (!fs.existsSync(backupPath)) {
-    fs.mkdirSync(backupPath, { recursive: true });
+  const fallbackResult = await processVendor1LikeImageByOCR(
+    reportRootPath,
+    imagePath,
+  );
+  return fallbackResult;
+}
+
+async function renameAutoXrayFiles(reportRootPath) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    throw new Error("ไม่พบโฟลเดอร์ root");
   }
 
-  try {
-    const backupFile = path.join(backupPath, imageFile.name);
-    if (!fs.existsSync(backupFile)) {
-      fs.copyFileSync(imageFile.path, backupFile);
-    }
+  const imageFiles = walkImageFilesRecursive(reportRootPath).filter(
+    (file) =>
+      !isBackupPath(file.path) &&
+      !isOcrTempPath(file.path) &&
+      !isGeneratedPath(file.path),
+  );
 
-    const result = renameUsingHN(ctx.petFolderPath, imageFile, hn, {
-      dateFolder: ctx.dateFolderName,
-      petFolder: ctx.petFolderName,
-    });
+  const renamedItems = [];
+  const skippedItems = [];
+
+  for (const imageFile of imageFiles) {
+    const result = await processAutoImageFile(reportRootPath, imageFile.path);
 
     if (result.type === "renamed") {
-      return result;
+      renamedItems.push(result.item);
+    } else if (result.item) {
+      skippedItems.push(result.item);
+    }
+  }
+
+  return {
+    mode: "auto",
+    reportRootPath,
+    imageFileCount: imageFiles.length,
+    renamedItems,
+    skippedItems,
+  };
+}
+
+async function renameVendor1XrayFiles(reportRootPath, specificFile = null) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    throw new Error("ไม่พบโฟลเดอร์ root");
+  }
+
+  const renamedItems = [];
+  const skippedItems = [];
+
+  if (specificFile) {
+    const ctx = resolveVendor1ContextFromFilePath(reportRootPath, specificFile);
+    if (!ctx) {
+      return {
+        mode: "vendor1",
+        reportRootPath,
+        renamedItems,
+        skippedItems: [
+          { reason: "ไฟล์นี้ไม่อยู่ในโครงสร้างค่าย 1", path: specificFile },
+        ],
+      };
+    }
+
+    const result = await processVendor1ImageFileFromContext(
+      reportRootPath,
+      specificFile,
+      ctx,
+    );
+
+    if (result.type === "renamed") {
+      renamedItems.push(result.item);
+    } else if (result.item) {
+      skippedItems.push(result.item);
     }
 
     return {
-      type: "skipped",
-      item: result.item,
-    };
-  } catch (err) {
-    return {
-      type: "skipped",
-      item: {
-        reason: err.message,
-        path: imageFile.path,
-      },
+      mode: "vendor1",
+      reportRootPath,
+      renamedItems,
+      skippedItems,
     };
   }
+
+  const imageFiles = walkImageFilesRecursive(reportRootPath).filter((file) => {
+    const ctx = resolveVendor1ContextFromFilePath(reportRootPath, file.path);
+    return Boolean(ctx);
+  });
+
+  for (const imageFile of imageFiles) {
+    const ctx = resolveVendor1ContextFromFilePath(reportRootPath, imageFile.path);
+    if (!ctx) continue;
+
+    const result = await processVendor1ImageFileFromContext(
+      reportRootPath,
+      imageFile.path,
+      ctx,
+    );
+
+    if (result.type === "renamed") {
+      renamedItems.push(result.item);
+    } else if (result.item) {
+      skippedItems.push(result.item);
+    }
+  }
+
+  return {
+    mode: "vendor1",
+    reportRootPath,
+    renamedItems,
+    skippedItems,
+  };
 }
 
 async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
@@ -531,6 +858,7 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   }
 
   let imageFiles = [];
+
   if (specificFile) {
     imageFiles.push({
       name: path.basename(specificFile),
@@ -538,10 +866,7 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
     });
   } else {
     imageFiles = getImageFiles(reportRootPath).filter(
-      (file) =>
-        !isBackupPath(file.path) &&
-        !isOcrTempPath(file.path) &&
-        !isGeneratedPath(file.path),
+      (file) => !isBackupPath(file.path) && !isOcrTempPath(file.path),
     );
   }
 
@@ -568,88 +893,6 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   };
 }
 
-async function renameVendor1XrayFiles(reportRootPath, specificFile = null) {
-  if (!reportRootPath || !isDirectory(reportRootPath)) {
-    throw new Error("ไม่พบโฟลเดอร์ root");
-  }
-
-  const renamedItems = [];
-  const skippedItems = [];
-
-  if (specificFile) {
-    const result = await processVendor1ImageFile(reportRootPath, specificFile);
-
-    if (result.type === "renamed") {
-      renamedItems.push(result.item);
-    } else if (result.item) {
-      skippedItems.push(result.item);
-    }
-
-    return {
-      mode: "vendor1",
-      reportRootPath,
-      renamedItems,
-      skippedItems,
-    };
-  }
-
-  const dateFolders = getDirectories(reportRootPath);
-
-  for (const dateFolder of dateFolders) {
-    const hnFolders = getDirectories(dateFolder.path).filter(
-      (folder) => folder.name !== "Backup",
-    );
-
-    for (const hnFolder of hnFolders) {
-      const petFolders = getDirectories(hnFolder.path).filter(
-        (folder) => folder.name !== "Backup",
-      );
-
-      if (petFolders.length === 0) {
-        skippedItems.push({
-          reason: "ไม่มีโฟลเดอร์ชื่อสัตว์ภายใต้ HN นี้",
-          path: hnFolder.path,
-        });
-        continue;
-      }
-
-      for (const petFolder of petFolders) {
-        const imageFiles = getImageFiles(petFolder.path).filter(
-          (file) => !isBackupPath(file.path) && !isOcrTempPath(file.path),
-        );
-
-        if (imageFiles.length === 0) {
-          skippedItems.push({
-            reason: "ไม่มีไฟล์ภาพในโฟลเดอร์ชื่อสัตว์",
-            path: petFolder.path,
-          });
-          continue;
-        }
-
-        for (const imageFile of imageFiles) {
-          const result = await processVendor1ImageFile(
-            reportRootPath,
-            imageFile.path,
-          );
-
-          if (result.type === "renamed") {
-            renamedItems.push(result.item);
-          } else if (result.item) {
-            skippedItems.push(result.item);
-          }
-        }
-      }
-    }
-  }
-
-  return {
-    mode: "vendor1",
-    reportRootPath,
-    renamedItems,
-    skippedItems,
-  };
-}
-
 async function renameXrayFilesByMode(mode, reportRootPath) {
   if (mode === "vendor1") {
     return renameVendor1XrayFiles(reportRootPath);
@@ -659,49 +902,45 @@ async function renameXrayFilesByMode(mode, reportRootPath) {
     return renameVendor2XrayFiles(reportRootPath);
   }
 
-  throw new Error("โหมดที่เลือกไม่ถูกต้อง");
+  return renameAutoXrayFiles(reportRootPath);
 }
 
-function detectVendorType(reportRootPath) {
-  if (!reportRootPath || !isDirectory(reportRootPath)) {
-    return null;
+async function enqueueTask(task) {
+  processingQueue = processingQueue
+    .then(task)
+    .catch((err) => {
+      console.warn("Processing error:", err.message);
+    });
+
+  return processingQueue;
+}
+
+async function closeFolderWatcher() {
+  if (!folderWatcher) return;
+
+  const watcher = folderWatcher;
+  folderWatcher = null;
+
+  try {
+    await watcher.close();
+  } catch (err) {
+    console.warn("Failed to close watcher:", err.message);
+  }
+}
+
+async function processFileSafely(reportRootPath, filePath) {
+  const resolved = normalizePathSafe(filePath);
+  if (processingFiles.has(resolved)) {
+    return;
   }
 
-  const rootImages = getImageFiles(reportRootPath).filter(
-    (file) => !isBackupPath(file.path) && !isOcrTempPath(file.path),
-  );
-  if (rootImages.length > 0) {
-    return "vendor2";
+  processingFiles.add(resolved);
+
+  try {
+    return await processAutoImageFile(reportRootPath, filePath);
+  } finally {
+    processingFiles.delete(resolved);
   }
-
-  const topLevelDirs = getDirectories(reportRootPath);
-
-  for (const dir of topLevelDirs) {
-    const subDirs = getDirectories(dir.path).filter(
-      (folder) => folder.name !== "Backup",
-    );
-
-    if (subDirs.length > 0) {
-      for (const subDir of subDirs) {
-        const petFolders = getDirectories(subDir.path).filter(
-          (folder) => folder.name !== "Backup",
-        );
-
-        if (petFolders.length > 0) {
-          for (const petFolder of petFolders) {
-            const images = getImageFiles(petFolder.path).filter(
-              (file) => !isBackupPath(file.path) && !isOcrTempPath(file.path),
-            );
-            if (images.length > 0) {
-              return "vendor1";
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return null;
 }
 
 async function startWatchingFolder(reportRootPath) {
@@ -710,8 +949,6 @@ async function startWatchingFolder(reportRootPath) {
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     return;
   }
-
-  let vendorType = detectVendorType(reportRootPath);
 
   folderWatcher = chokidar.watch(reportRootPath, {
     ignored: /(^|[\/\\])\.|_ocr|Backup/,
@@ -734,14 +971,8 @@ async function startWatchingFolder(reportRootPath) {
         return;
       }
 
-      vendorType = detectVendorType(reportRootPath);
-
       try {
-        if (vendorType === "vendor2") {
-          await renameVendor2XrayFiles(reportRootPath, filePath);
-        } else if (vendorType === "vendor1") {
-          await renameVendor1XrayFiles(reportRootPath, filePath);
-        }
+        await processFileSafely(reportRootPath, filePath);
       } catch (err) {
         console.warn("Auto-rename error:", err.message);
       }
@@ -812,24 +1043,11 @@ ipcMain.handle("select-report-folder", async () => {
 
   if (result.canceled) return null;
 
-  const folderPath = result.filePaths[0];
-  const vendorType = detectVendorType(folderPath);
-
-  try {
-    if (vendorType === "vendor2") {
-      await renameVendor2XrayFiles(folderPath);
-    } else if (vendorType === "vendor1") {
-      await renameVendor1XrayFiles(folderPath);
-    }
-  } catch (err) {
-    console.warn("Auto-rename on select error:", err.message);
-  }
-
-  return folderPath;
+  return result.filePaths[0];
 });
 
 ipcMain.handle("rename-xray-files", async (_event, payload) => {
-  return renameXrayFilesByMode(payload?.mode, payload?.reportRootPath);
+  return renameXrayFilesByMode(payload?.mode || "auto", payload?.reportRootPath);
 });
 
 ipcMain.handle("detect-vendor-type", async (_event, reportRootPath) => {
@@ -887,6 +1105,5 @@ app.on("before-quit", async () => {
 app.on("window-all-closed", (e) => {
   if (!isQuitting) {
     e.preventDefault();
-    return;
   }
 });
