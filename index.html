@@ -271,7 +271,7 @@
         <h1>โปรแกรมเปลี่ยนชื่อไฟล์ Xray ตาม HN</h1>
         <p>
           เลือกโฟลเดอร์หลักเพียงครั้งเดียว แล้วโปรแกรมจะสแกนและเฝ้าดูไฟล์ใหม่ให้อัตโนมัติ
-          ระบบนี้แยกอ่านรูปทีละไฟล์ได้ ไม่ยึดค่ายทั้งโฟลเดอร์
+          ระบบนี้แยกอ่านรูปทีละไฟล์ได้ ไม่ยึดรูปแบบทั้งโฟลเดอร์
         </p>
         <div class="mode-chip">
           <span id="watchDot" class="dot idle"></span>
@@ -294,7 +294,7 @@
           </div>
 
           <div class="path-box">
-            <div class="muted">โครงสร้างที่ตรวจพบ</div>
+            <div class="muted">รูปแบบที่ตรวจพบ</div>
             <code id="detectedMode">-</code>
           </div>
         </div>
@@ -307,10 +307,12 @@
         <ol id="stepsList" class="steps"></ol>
 
         <div class="helper">
-          <div class="muted">โครงสร้างตัวอย่าง</div>
-          <div id="structureHint">-</div>
+          <div class="muted">รูปแบบที่ 1</div>
+          <div id="formatOneHint">root → วันที่ → HN → ชื่อสัตว์ → รูป</div>
+          <div class="muted" style="margin-top: 10px">รูปแบบที่ 2</div>
+          <div id="formatTwoHint">รูปภาพ X-ray ที่มีรหัส HN อยู่ในภาพ</div>
           <div class="muted" style="margin-top: 10px">
-            หมายเหตุ: โปรแกรมจะดูทีละรูป แล้วเลือกวิธี rename ให้เอง
+            โปรแกรมจะดูทีละรูป แล้วเลือกวิธี rename ให้เอง
           </div>
         </div>
 
@@ -382,7 +384,8 @@
       const watchText = document.getElementById("watchText");
       const metricOneLabel = document.getElementById("metricOneLabel");
       const metricOneValue = document.getElementById("metricOneValue");
-      const structureHint = document.getElementById("structureHint");
+      const formatOneHint = document.getElementById("formatOneHint");
+      const formatTwoHint = document.getElementById("formatTwoHint");
 
       let currentReportPath = "";
       let detectedVendor = null;
@@ -452,11 +455,11 @@
         ];
 
         if (vendor === "vendor1") {
-          steps.push("โฟลเดอร์ค่าย 1 ใช้รูปแบบ root / วันที่ / HN / ชื่อสัตว์ / รูป");
+          steps.push("รูปแบบที่ 1 ต้องเป็นโครงสร้าง root → วันที่ → HN → ชื่อสัตว์ → รูป");
         } else if (vendor === "vendor2") {
-          steps.push("โฟลเดอร์ค่าย 2 ใช้รูปแบบ root / รูป");
+          steps.push("รูปแบบที่ 2 ต้องเป็นไฟล์ภาพ X-ray ที่มีรหัส HN อยู่ในภาพ");
         } else if (vendor === "mixed") {
-          steps.push("โฟลเดอร์นี้มีทั้งค่าย 1 และค่าย 2 ปนกัน โปรแกรมแยกให้เอง");
+          steps.push("โฟลเดอร์นี้มีทั้งรูปแบบที่ 1 และรูปแบบที่ 2 ปนกัน โปรแกรมแยกให้เอง");
         } else {
           steps.push("ถ้ายังไม่พบโครงสร้าง โปรแกรมจะรอไฟล์ภาพจริงก่อน");
         }
@@ -469,19 +472,23 @@
         }
       }
 
-      function setBackupHint(vendor) {
+      function setFormatHints(vendor) {
         if (vendor === "vendor1") {
-          backupHint.textContent = "Backup ของค่าย 1 จะอยู่ในโฟลเดอร์ pet ของแต่ละ HN";
-          structureHint.textContent = "root / วันที่ / HN / ชื่อสัตว์ / รูป";
+          formatOneHint.textContent = "root → วันที่ → HN → ชื่อสัตว์ → รูป";
+          formatTwoHint.textContent = "ไม่ใช่โครงสร้างนี้";
+          backupHint.textContent = "Backup ของรูปแบบที่ 1 จะอยู่ในโฟลเดอร์ชื่อสัตว์ของแต่ละ HN";
         } else if (vendor === "vendor2") {
-          backupHint.textContent = "Backup ของค่าย 2 จะอยู่ที่ root/Backup";
-          structureHint.textContent = "root / รูป";
+          formatOneHint.textContent = "ไม่ใช่โครงสร้างนี้";
+          formatTwoHint.textContent = "รูปภาพ X-ray ที่มีรหัส HN อยู่ในภาพ";
+          backupHint.textContent = "Backup ของรูปแบบที่ 2 จะอยู่ที่ root/Backup";
         } else if (vendor === "mixed") {
-          backupHint.textContent = "ค่าย 1 เก็บใน pet/Backup ส่วนค่าย 2 เก็บใน root/Backup";
-          structureHint.textContent = "มีทั้ง root/รูป และ root/วันที่/HN/ชื่อสัตว์/รูป";
+          formatOneHint.textContent = "root → วันที่ → HN → ชื่อสัตว์ → รูป";
+          formatTwoHint.textContent = "รูปภาพ X-ray ที่มีรหัส HN อยู่ในภาพ";
+          backupHint.textContent = "รูปแบบที่ 1 เก็บ Backup ในโฟลเดอร์ชื่อสัตว์ ส่วนรูปแบบที่ 2 เก็บใน root/Backup";
         } else {
+          formatOneHint.textContent = "root → วันที่ → HN → ชื่อสัตว์ → รูป";
+          formatTwoHint.textContent = "รูปภาพ X-ray ที่มีรหัส HN อยู่ในภาพ";
           backupHint.textContent = "-";
-          structureHint.textContent = "-";
         }
       }
 
@@ -522,15 +529,15 @@
         detectedVendor = vendor;
         detectedMode.textContent =
           vendor === "vendor1"
-            ? "ค่าย 1"
+            ? "รูปแบบที่ 1"
             : vendor === "vendor2"
-              ? "ค่าย 2"
+              ? "รูปแบบที่ 2"
               : vendor === "mixed"
-                ? "ค่าย 1 + ค่าย 2"
+                ? "รูปแบบที่ 1 + รูปแบบที่ 2"
                 : "-";
 
         renderSteps(vendor);
-        setBackupHint(vendor);
+        setFormatHints(vendor);
       }
 
       async function startWatching(folderPath) {
@@ -656,7 +663,7 @@
         const lastPath = getLastPath();
         if (!lastPath) {
           renderSteps(null);
-          setBackupHint(null);
+          setFormatHints(null);
           setWatchState(false, "ยังไม่ได้เริ่มเฝ้าดูโฟลเดอร์");
           syncButtons();
           return;
@@ -688,7 +695,7 @@
         }
 
         renderSteps(null);
-        setBackupHint(null);
+        setFormatHints(null);
         setWatchState(false, "ยังไม่ได้เริ่มเฝ้าดูโฟลเดอร์");
         syncButtons();
 
