@@ -7,16 +7,18 @@
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0f172a;
-        --panel: rgba(15, 23, 42, 0.88);
+        --bg: #0b1220;
+        --panel: rgba(15, 23, 42, 0.86);
         --panel-2: rgba(30, 41, 59, 0.96);
+        --panel-3: rgba(15, 23, 42, 0.72);
         --text: #e5e7eb;
         --muted: #94a3b8;
         --accent: #38bdf8;
         --accent-2: #0ea5e9;
         --success: #22c55e;
+        --warning: #f59e0b;
         --danger: #ef4444;
-        --border: rgba(148, 163, 184, 0.2);
+        --border: rgba(148, 163, 184, 0.18);
       }
 
       * {
@@ -27,79 +29,75 @@
         margin: 0;
         min-height: 100vh;
         font-family: Arial, Helvetica, sans-serif;
+        color: var(--text);
         background:
           radial-gradient(circle at top, rgba(14, 165, 233, 0.15), transparent 30%),
-          linear-gradient(135deg, #020617, #111827 55%, #0f172a);
-        color: var(--text);
+          linear-gradient(135deg, #020617, #0f172a 55%, #111827);
       }
 
       .layout {
-        width: min(1120px, calc(100vw - 32px));
+        width: min(1180px, calc(100vw - 32px));
         margin: 24px auto;
         display: grid;
-        gap: 20px;
+        gap: 18px;
       }
 
       .card {
-        padding: 24px;
+        padding: 22px;
         border-radius: 20px;
         background: var(--panel);
         border: 1px solid var(--border);
-        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
         backdrop-filter: blur(10px);
       }
 
       h1,
       h2,
-      h3 {
+      h3,
+      p {
         margin: 0;
       }
 
-      .hero,
-      .mode-panel {
+      .hero {
         display: grid;
-        gap: 12px;
+        gap: 10px;
       }
 
+      .hero h1 {
+        font-size: 2rem;
+        letter-spacing: 0.2px;
+      }
+
+      .hero p,
       .muted,
-      p,
       li,
       label {
         color: var(--muted);
         line-height: 1.6;
       }
 
-      .steps {
-        margin: 0;
-        padding-left: 20px;
-      }
-
-      .mode-grid,
-      .summary {
+      .grid-2 {
         display: grid;
         gap: 16px;
-      }
-
-      .mode-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
-      .mode-option {
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 18px;
-        background: rgba(15, 23, 42, 0.72);
+      .grid-3 {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
-      .mode-option input {
-        margin-right: 10px;
+      .stack {
+        display: grid;
+        gap: 12px;
       }
 
-      .actions {
+      .row {
         display: flex;
         flex-wrap: wrap;
         gap: 12px;
-        margin-top: 12px;
+        align-items: center;
       }
 
       button {
@@ -111,7 +109,8 @@
         cursor: pointer;
         transition:
           transform 0.15s ease,
-          opacity 0.15s ease;
+          opacity 0.15s ease,
+          box-shadow 0.15s ease;
       }
 
       button:hover {
@@ -119,7 +118,7 @@
       }
 
       button:disabled {
-        opacity: 0.6;
+        opacity: 0.55;
         cursor: not-allowed;
         transform: none;
       }
@@ -127,6 +126,7 @@
       .primary {
         background: linear-gradient(135deg, var(--accent), var(--accent-2));
         color: #082f49;
+        box-shadow: 0 12px 24px rgba(14, 165, 233, 0.18);
       }
 
       .secondary {
@@ -135,30 +135,58 @@
         border: 1px solid var(--border);
       }
 
+      .danger {
+        background: rgba(239, 68, 68, 0.12);
+        color: #fecaca;
+        border: 1px solid rgba(239, 68, 68, 0.25);
+      }
+
       .path-box,
       .status,
-      .log-list,
-      .note {
-        margin-top: 16px;
+      .note,
+      .helper {
         padding: 16px;
         border-radius: 16px;
         background: var(--panel-2);
         border: 1px solid var(--border);
       }
 
-      .path-box code {
+      .path-box code,
+      .inline-code {
         color: #bae6fd;
         word-break: break-all;
       }
 
-      .summary {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+      .inline-code {
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .status {
+        white-space: pre-wrap;
+      }
+
+      .status.info {
+        border-color: rgba(56, 189, 248, 0.32);
+      }
+
+      .status.success {
+        border-color: rgba(34, 197, 94, 0.32);
+      }
+
+      .status.error {
+        border-color: rgba(239, 68, 68, 0.32);
+      }
+
+      .status.warning {
+        border-color: rgba(245, 158, 11, 0.32);
       }
 
       .metric {
         padding: 18px;
         border-radius: 16px;
-        background: rgba(15, 23, 42, 0.75);
+        background: var(--panel-3);
         border: 1px solid var(--border);
       }
 
@@ -169,29 +197,14 @@
         color: white;
       }
 
-      .status {
-        white-space: pre-wrap;
-      }
-
-      .status.success {
-        border-color: rgba(34, 197, 94, 0.35);
-      }
-
-      .status.error {
-        border-color: rgba(239, 68, 68, 0.35);
-      }
-
-      .status.info {
-        border-color: rgba(56, 189, 248, 0.35);
-      }
-
-      .log-list {
+      .list {
         max-height: 320px;
         overflow: auto;
         padding-left: 20px;
+        margin: 0;
       }
 
-      .log-list li {
+      .list li {
         margin-bottom: 10px;
         word-break: break-word;
       }
@@ -204,16 +217,49 @@
         color: #fde68a;
       }
 
-      .inline-code {
-        padding: 2px 8px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.08);
-        color: #93c5fd;
+      .steps {
+        margin: 0;
+        padding-left: 20px;
       }
 
-      @media (max-width: 860px) {
-        .mode-grid,
-        .summary {
+      .mode-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #e2e8f0;
+        font-size: 14px;
+        width: fit-content;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #64748b;
+      }
+
+      .dot.active {
+        background: var(--success);
+      }
+
+      .dot.idle {
+        background: var(--warning);
+      }
+
+      .log-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      @media (max-width: 920px) {
+        .grid-2,
+        .grid-3 {
           grid-template-columns: 1fr;
         }
       }
@@ -224,38 +270,52 @@
       <section class="card hero">
         <h1>โปรแกรมเปลี่ยนชื่อไฟล์ Xray ตาม HN</h1>
         <p>
-          โปรแกรมนี้จะตรวจจับประเภท Xray อัตโนมัติ เพียงเลือกโฟลเดอร์แล้วนั่ง รอ เมื่อมีรูปใหม่จะเปลี่ยนชื่อให้เอง
+          เลือกโฟลเดอร์ root เพียงครั้งเดียว แล้วโปรแกรมจะตรวจจับประเภทอัตโนมัติ
+          จากนั้นเฝ้าดูไฟล์ใหม่และเปลี่ยนชื่อให้เอง
         </p>
+        <div class="mode-chip">
+          <span id="watchDot" class="dot idle"></span>
+          <span id="watchText">ยังไม่ได้เริ่มเฝ้าดูโฟลเดอร์</span>
+        </div>
       </section>
 
-      <section class="card mode-panel">
-        <div class="actions">
+      <section class="card stack">
+        <div class="row">
           <button id="selectFolderButton" class="primary">เลือกโฟลเดอร์</button>
+          <button id="rescanButton" class="secondary" disabled>สแกนใหม่</button>
+          <button id="stopWatchButton" class="danger" disabled>หยุดเฝ้าดู</button>
+          <button id="clearLogButton" class="secondary">ล้างรายการ</button>
         </div>
 
-        <div class="path-box">
-          <div class="muted">โฟลเดอร์ที่เลือก</div>
-          <code id="selectedPath">ยังไม่ได้เลือกโฟลเดอร์</code>
-        </div>
-        
-        <div class="path-box">
-          <div class="muted">ประเภทที่ตรวจพบ</div>
-          <code id="detectedMode">-</code>
+        <div class="grid-2">
+          <div class="path-box">
+            <div class="muted">โฟลเดอร์ที่เลือก</div>
+            <code id="selectedPath">ยังไม่ได้เลือกโฟลเดอร์</code>
+          </div>
+
+          <div class="path-box">
+            <div class="muted">ประเภทที่ตรวจพบ</div>
+            <code id="detectedMode">-</code>
+          </div>
         </div>
 
         <div id="status" class="status info">เลือกโฟลเดอร์เพื่อเริ่มต้น</div>
       </section>
 
-      <section class="card">
-        <h2>วิธีใช้งาน</h2>
+      <section class="card stack">
+        <h2>วิธีใช้ที่ถูกต้อง</h2>
         <ol id="stepsList" class="steps"></ol>
+        <div class="note">
+          <strong>ตำแหน่ง Backup</strong>
+          <div class="muted" id="backupHint">-</div>
+        </div>
       </section>
 
       <section class="card">
-        <h2>สรุปผล</h2>
-        <div class="summary">
+        <h2>สรุปผลล่าสุด</h2>
+        <div class="grid-3">
           <div class="metric">
-            <div class="muted" id="metricOneLabel">จำนวนโฟลเดอร์วันที่</div>
+            <div class="muted" id="metricOneLabel">จำนวนไฟล์ล่าสุดที่ตรวจพบ</div>
             <strong id="metricOneValue">0</strong>
           </div>
           <div class="metric">
@@ -270,18 +330,35 @@
       </section>
 
       <section class="card">
-        <h2>รายการไฟล์ที่เปลี่ยนชื่อ</h2>
-        <ul id="renamedList" class="log-list"></ul>
+        <div class="log-head">
+          <h2>รายการไฟล์ที่เปลี่ยนชื่อ</h2>
+          <span class="muted">ดูผลจากการสแกนล่าสุด</span>
+        </div>
+        <ul id="renamedList" class="list"></ul>
       </section>
 
       <section class="card">
-        <h2>รายการที่ข้าม</h2>
-        <ul id="skippedList" class="log-list"></ul>
+        <div class="log-head">
+          <h2>รายการที่ข้าม</h2>
+          <span class="muted">ไฟล์ที่ OCR ไม่พบ / ไฟล์เดิม / ไฟล์ระบบ</span>
+        </div>
+        <ul id="skippedList" class="list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>บันทึกเหตุการณ์</h2>
+        <ul id="eventList" class="list"></ul>
       </section>
     </main>
 
     <script>
+      const api = window.xrayApp;
+
       const selectFolderButton = document.getElementById("selectFolderButton");
+      const rescanButton = document.getElementById("rescanButton");
+      const stopWatchButton = document.getElementById("stopWatchButton");
+      const clearLogButton = document.getElementById("clearLogButton");
+
       const selectedPath = document.getElementById("selectedPath");
       const detectedMode = document.getElementById("detectedMode");
       const statusBox = document.getElementById("status");
@@ -289,45 +366,55 @@
       const skippedCount = document.getElementById("skippedCount");
       const renamedList = document.getElementById("renamedList");
       const skippedList = document.getElementById("skippedList");
+      const eventList = document.getElementById("eventList");
+      const stepsList = document.getElementById("stepsList");
+      const backupHint = document.getElementById("backupHint");
+      const watchDot = document.getElementById("watchDot");
+      const watchText = document.getElementById("watchText");
+      const metricOneLabel = document.getElementById("metricOneLabel");
+      const metricOneValue = document.getElementById("metricOneValue");
 
       let currentReportPath = "";
       let detectedVendor = null;
+      let latestResult = {
+        renamedItems: [],
+        skippedItems: [],
+        imageFileCount: 0,
+      };
 
       function setStatus(message, type = "info") {
         statusBox.textContent = message;
         statusBox.className = `status ${type}`;
       }
 
-      function saveLastPath(path) {
-        localStorage.setItem("lastReportPath", path);
+      function setWatchState(active, text) {
+        watchDot.className = active ? "dot active" : "dot idle";
+        watchText.textContent = text;
+        stopWatchButton.disabled = !active;
+      }
+
+      function saveLastPath(folderPath) {
+        localStorage.setItem("lastReportPath", folderPath);
       }
 
       function getLastPath() {
         return localStorage.getItem("lastReportPath") || "";
       }
 
-      function loadSavedPath() {
-        const lastPath = getLastPath();
-        if (lastPath) {
-          currentReportPath = lastPath;
-          selectedPath.textContent = lastPath;
-          
-          // เริ่มตรวจจับไฟล์ใหม่
-          window.xrayApp.startWatchingFolder(lastPath).catch(err => {
-            console.error("Error starting folder watch:", err);
-          });
-          
-          // ตรวจจับรูปแบบ
-          window.xrayApp.detectVendorType(lastPath).then(vendor => {
-            if (vendor) {
-              detectedVendor = vendor;
-              detectedMode.textContent = vendor === "vendor1" ? "ค่าย 1" : "ค่าย 2";
-              setStatus(`โหลดโฟลเดอร์ที่ใช้ล่าสุด - ตรวจพบ: ${vendor === "vendor1" ? "ค่าย 1" : "ค่าย 2"} - กำลังตรวจสอบไฟล์ใหม่`, "success");
-            }
-          }).catch(err => {
-            console.error("Error detecting vendor:", err);
-          });
+      function appendEvent(message, type = "info") {
+        const li = document.createElement("li");
+        li.className = type;
+        li.textContent = `[${new Date().toLocaleTimeString("th-TH")}] ${message}`;
+        eventList.prepend(li);
+
+        while (eventList.children.length > 20) {
+          eventList.removeChild(eventList.lastChild);
         }
+      }
+
+      function clearLists() {
+        renamedList.innerHTML = "";
+        skippedList.innerHTML = "";
       }
 
       function renderList(element, items, type) {
@@ -349,106 +436,235 @@
         }
       }
 
+      function renderSteps(vendor) {
+        const steps = [];
+
+        steps.push("เลือกโฟลเดอร์ root ของงาน");
+        steps.push("โปรแกรมจะตรวจจับประเภทอัตโนมัติและเริ่มเฝ้าดูไฟล์ใหม่");
+        steps.push("อย่าเอาไฟล์ Backup หรือไฟล์ _ocr ไปวางปะปนในโฟลเดอร์ต้นทาง");
+        steps.push("ถ้าต้องการบังคับตรวจทั้งโฟลเดอร์อีกครั้ง ให้กดปุ่ม สแกนใหม่");
+
+        if (vendor === "vendor1") {
+          steps.push("โครงสร้างที่ถูกต้องคือ root / วันที่ / HN / ชื่อสัตว์ / รูป");
+          steps.push("Backup จะอยู่ในโฟลเดอร์ชื่อสัตว์ เช่น root/date/HN/pet/Backup");
+        } else if (vendor === "vendor2") {
+          steps.push("โครงสร้างที่ถูกต้องคือ root / รูป");
+          steps.push("Backup จะอยู่ใน root/Backup");
+        } else {
+          steps.push("ถ้ายังไม่พบประเภท โปรแกรมจะรอไฟล์ภาพจริงก่อน");
+        }
+
+        stepsList.innerHTML = "";
+        for (const text of steps) {
+          const li = document.createElement("li");
+          li.textContent = text;
+          stepsList.appendChild(li);
+        }
+      }
+
+      function setBackupHint(vendor) {
+        if (vendor === "vendor1") {
+          backupHint.textContent = "vendor1: Backup อยู่ในโฟลเดอร์ pet ของแต่ละ HN";
+        } else if (vendor === "vendor2") {
+          backupHint.textContent = "vendor2: Backup อยู่ที่ root ของโฟลเดอร์ที่เลือก";
+        } else {
+          backupHint.textContent = "ยังไม่พบประเภทโฟลเดอร์";
+        }
+      }
+
+      function formatRenamedItem(item, mode) {
+        if (mode === "vendor2") {
+          return `${item.oldName} → ${item.newName} (HN: ${item.hn})`;
+        }
+
+        return `[${item.dateFolder} / ${item.hn} / ${item.petFolder}] ${item.oldName} → ${item.newName}`;
+      }
+
+      function formatSkippedItem(item) {
+        const preview = item.ocrPreview ? ` | OCR: ${item.ocrPreview}` : "";
+        return `${item.reason} : ${item.path}${preview}`;
+      }
+
       function updateSummary(result) {
-        const selectedMode = result.mode || detectedVendor;
-        
-        renamedCount.textContent = result.renamedItems.length || 0;
-        skippedCount.textContent = result.skippedItems.length || 0;
+        latestResult = {
+          renamedItems: result?.renamedItems || [],
+          skippedItems: result?.skippedItems || [],
+          imageFileCount: result?.imageFileCount || 0,
+        };
+
+        const mode = result?.mode || detectedVendor || "vendor2";
+
+        metricOneLabel.textContent =
+          mode === "vendor1"
+            ? "จำนวนไฟล์ล่าสุดที่สแกน"
+            : "จำนวนไฟล์ล่าสุดที่ตรวจพบ";
+
+        metricOneValue.textContent = String(latestResult.imageFileCount || 0);
+        renamedCount.textContent = String(latestResult.renamedItems.length || 0);
+        skippedCount.textContent = String(latestResult.skippedItems.length || 0);
 
         renderList(
           renamedList,
-          result.renamedItems.map((item) => {
-            if (selectedMode === "vendor2") {
-              return `${item.oldName} → ${item.newName} (HN: ${item.hn})`;
-            }
-
-            return `[${item.dateFolder} / ${item.hn} / ${item.petFolder}] ${item.oldName} → ${item.newName}`;
-          }),
-          "renamed"
+          latestResult.renamedItems.map((item) => formatRenamedItem(item, mode)),
+          "renamed",
         );
 
         renderList(
           skippedList,
-          result.skippedItems.map((item) => {
-            const preview = item.ocrPreview ? ` | OCR: ${item.ocrPreview}` : "";
-            return `${item.reason} : ${item.path}${preview}`;
-          }),
-          "skipped"
+          latestResult.skippedItems.map((item) => formatSkippedItem(item)),
+          "skipped",
         );
+      }
+
+      async function refreshVendorAndUI(folderPath) {
+        const vendor = await api.detectVendorType(folderPath);
+        detectedVendor = vendor;
+        detectedMode.textContent =
+          vendor === "vendor1"
+            ? "ค่าย 1"
+            : vendor === "vendor2"
+              ? "ค่าย 2"
+              : "-";
+
+        renderSteps(vendor);
+        setBackupHint(vendor);
+      }
+
+      async function startWatching(folderPath) {
+        if (!folderPath) return;
+        await api.startWatchingFolder(folderPath);
+        setWatchState(true, "กำลังเฝ้าดูโฟลเดอร์อยู่");
+      }
+
+      async function stopWatching() {
+        await api.stopWatchingFolder();
+        setWatchState(false, "หยุดเฝ้าดูโฟลเดอร์แล้ว");
+      }
+
+      async function openFolder(folderPath) {
+        currentReportPath = folderPath;
+        selectedPath.textContent = folderPath;
+        saveLastPath(folderPath);
+
+        await refreshVendorAndUI(folderPath);
+        await startWatching(folderPath);
+
+        setStatus("เลือกโฟลเดอร์สำเร็จ และเริ่มเฝ้าดูไฟล์ใหม่แล้ว", "success");
+        appendEvent(`เลือกโฟลเดอร์: ${folderPath}`, "success");
       }
 
       selectFolderButton.addEventListener("click", async () => {
         setStatus("กำลังเลือกโฟลเดอร์...", "info");
 
         try {
-          const folderPath = await window.xrayApp.selectReportFolder();
+          const folderPath = await api.selectReportFolder();
 
           if (!folderPath) {
-            setStatus("ยกเลิกการเลือกโฟลเดอร์", "info");
+            setStatus("ยกเลิกการเลือกโฟลเดอร์", "warning");
+            appendEvent("ยกเลิกการเลือกโฟลเดอร์", "skipped");
             return;
           }
 
-          currentReportPath = folderPath;
-          selectedPath.textContent = folderPath;
-          saveLastPath(folderPath);
-          
-          // เริ่มตรวจจับไฟล์ใหม่
-          await window.xrayApp.startWatchingFolder(folderPath);
-          
-          // ตรวจจับรูปแบบทันที
-          const vendor = await window.xrayApp.detectVendorType(folderPath);
-          if (vendor) {
-            detectedVendor = vendor;
-            detectedMode.textContent = vendor === "vendor1" ? "ค่าย 1" : "ค่าย 2";
-            setStatus(`ตรวจพบ: ${vendor === "vendor1" ? "ค่าย 1" : "ค่าย 2"} - กำลังตรวจสอบไฟล์ใหม่`, "success");
-          } else {
-            setStatus("ไม่พบไฟล์ภาพในโฟลเดอร์ที่เลือก", "error");
-          }
+          await openFolder(folderPath);
         } catch (error) {
           setStatus(`เกิดข้อผิดพลาดในการเลือกโฟลเดอร์: ${error.message}`, "error");
+          appendEvent(`ผิดพลาด: ${error.message}`, "skipped");
         }
       });
 
-      async function autoRenameImages() {
+      rescanButton.addEventListener("click", async () => {
         if (!currentReportPath || !detectedVendor) {
+          setStatus("ยังไม่ได้เลือกโฟลเดอร์", "warning");
           return;
         }
 
-        selectFolderButton.disabled = true;
-        setStatus(
-          detectedVendor === "vendor2"
-            ? "กำลัง OCR หา HN และเปลี่ยนชื่อไฟล์..."
-            : "กำลังเปลี่ยนชื่อไฟล์ Xray...",
-          "info"
-        );
+        rescanButton.disabled = true;
+        setStatus("กำลังสแกนใหม่ทั้งโฟลเดอร์...", "info");
+        appendEvent("เริ่มสแกนใหม่ทั้งโฟลเดอร์", "info");
 
         try {
-          const result = await window.xrayApp.renameXrayFiles({
+          const result = await api.renameXrayFiles({
             mode: detectedVendor,
-            reportRootPath: currentReportPath
+            reportRootPath: currentReportPath,
           });
 
           updateSummary(result);
-
           setStatus(
-            `เสร็จสิ้น เปลี่ยนชื่อไฟล์ ${result.renamedItems.length} ไฟล์ และข้าม ${result.skippedItems.length} รายการ`,
-            "success"
+            `สแกนเสร็จสิ้น: เปลี่ยนชื่อ ${result.renamedItems.length} ไฟล์, ข้าม ${result.skippedItems.length} รายการ`,
+            "success",
+          );
+          appendEvent(
+            `สแกนเสร็จ: renamed=${result.renamedItems.length}, skipped=${result.skippedItems.length}`,
+            "success",
           );
         } catch (error) {
           setStatus(`เกิดข้อผิดพลาด: ${error.message}`, "error");
+          appendEvent(`สแกนล้มเหลว: ${error.message}`, "skipped");
         } finally {
-          selectFolderButton.disabled = false;
+          rescanButton.disabled = false;
+        }
+      });
+
+      stopWatchButton.addEventListener("click", async () => {
+        try {
+          await stopWatching();
+          appendEvent("หยุดเฝ้าดูโฟลเดอร์", "info");
+        } catch (error) {
+          setStatus(`หยุดเฝ้าดูไม่สำเร็จ: ${error.message}`, "error");
+        }
+      });
+
+      clearLogButton.addEventListener("click", () => {
+        eventList.innerHTML = "";
+      });
+
+      if (api?.onNewImageDetected) {
+        api.onNewImageDetected(async (data) => {
+          setStatus(`พบไฟล์ใหม่: ${data.fileName} — ระบบกำลังจัดการให้อัตโนมัติ`, "info");
+          appendEvent(`พบไฟล์ใหม่: ${data.fileName}`, "info");
+        });
+      }
+
+      async function loadSavedPath() {
+        const lastPath = getLastPath();
+        if (!lastPath) {
+          renderSteps(null);
+          setBackupHint(null);
+          setWatchState(false, "ยังไม่ได้เริ่มเฝ้าดูโฟลเดอร์");
+          return;
+        }
+
+        currentReportPath = lastPath;
+        selectedPath.textContent = lastPath;
+
+        try {
+          await refreshVendorAndUI(lastPath);
+          await startWatching(lastPath);
+
+          setStatus("โหลดโฟลเดอร์ล่าสุดสำเร็จ และเริ่มเฝ้าดูไฟล์ใหม่แล้ว", "success");
+          appendEvent(`โหลดโฟลเดอร์ล่าสุด: ${lastPath}`, "success");
+        } catch (error) {
+          setStatus(`โหลดโฟลเดอร์ล่าสุดไม่สำเร็จ: ${error.message}`, "error");
+          appendEvent(`โหลดโฟลเดอร์ล่าสุดล้มเหลว: ${error.message}`, "skipped");
         }
       }
 
-      // Listen for new images
-      window.xrayApp.onNewImageDetected(async (data) => {
-        setStatus(`📸 พบไฟล์รูปใหม่: ${data.fileName} - กำลังเปลี่ยนชื่อ...`, "info");
-        await autoRenameImages();
-      });
+      (async function init() {
+        if (!api) {
+          setStatus("ไม่พบ bridge ของโปรแกรม", "error");
+          selectFolderButton.disabled = true;
+          rescanButton.disabled = true;
+          stopWatchButton.disabled = true;
+          return;
+        }
 
-      updateModeUI();
-      loadSavedPath();
+        clearLists();
+        renderSteps(null);
+        setBackupHint(null);
+        setWatchState(false, "ยังไม่ได้เริ่มเฝ้าดูโฟลเดอร์");
+
+        await loadSavedPath();
+      })();
     </script>
   </body>
 </html>
