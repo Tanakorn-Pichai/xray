@@ -3,12 +3,16 @@ const path = require("path");
 const Tesseract = require("tesseract.js");
 const sharp = require("sharp");
 const { imageSize } = require("image-size");
+const chokidar = require("chokidar");
 app.disableHardwareAcceleration();
 
 let tray = null;
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".pdf", ".webp",
 ]);
+
+let mainWindow = null;
+let folderWatcher = null;
 
 function isDirectory(targetPath) {
   try {
@@ -73,6 +77,25 @@ function normalizeHN(code) {
     .replace(/O/g, "0")
     .replace(/I/g, "1")
     .replace(/S/g, "5");
+}
+
+async function safeUnlink(filePath, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      return true;
+    } catch (err) {
+      if (i < maxRetries - 1) {
+        // รอ 100ms แล้วลองใหม่
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } else {
+        console.warn(`Failed to delete ${filePath} after ${maxRetries} retries:`, err.message);
+      }
+    }
+  }
+  return false;
 }
 
 function extractNumericHN(rawText) {
@@ -222,8 +245,8 @@ async function renameVendor2XrayFiles(reportRootPath) {
         path: imageFile.path,
       });
     } finally {
-      if (tempOcrFile && fs.existsSync(tempOcrFile)) {
-        fs.unlinkSync(tempOcrFile);
+      if (tempOcrFile) {
+        await safeUnlink(tempOcrFile);
       }
     }
   }
@@ -319,8 +342,85 @@ async function renameXrayFilesByMode(mode, reportRootPath) {
   throw new Error("โหมดที่เลือกไม่ถูกต้อง");
 }
 
+function detectVendorType(reportRootPath) {
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    return null;
+  }
+
+  // ตรวจสอบ vendor2: ไฟล์ภาพในระดับ root โดยตรง
+  const rootImages = getImageFiles(reportRootPath);
+  if (rootImages.length > 0) {
+    return "vendor2";
+  }
+
+  // ตรวจสอบ vendor1: โครงสร้าง date folders → HN folders → image files
+  const topLevelDirs = getDirectories(reportRootPath);
+  
+  // ถ้ามี folder ที่ดูเหมือน date format
+  for (const dir of topLevelDirs) {
+    const subDirs = getDirectories(dir.path);
+    
+    // vendor1 ต้องมี HN folders อย่างน้อย 1 folder
+    if (subDirs.length > 0) {
+      for (const subDir of subDirs) {
+        const petFolders = getDirectories(subDir.path);
+        // ถ้า HN folder มี pet folders
+        if (petFolders.length > 0) {
+          for (const petFolder of petFolders) {
+            const images = getImageFiles(petFolder.path);
+            if (images.length > 0) {
+              return "vendor1";
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ไม่สามารถตรวจสอบได้
+  return null;
+}
+
+function startWatchingFolder(reportRootPath) {
+  // ปิด watcher เก่าก่อน
+  if (folderWatcher) {
+    folderWatcher.close();
+  }
+
+  if (!reportRootPath || !isDirectory(reportRootPath)) {
+    return;
+  }
+
+  folderWatcher = chokidar.watch(reportRootPath, {
+    ignored: /(^|[\/\\])\.|_ocr/,
+    persistent: true,
+    ignoreInitial: true,
+    awaitWriteFinish: {
+      stabilityThreshold: 1000,
+      pollInterval: 100
+    }
+  });
+
+  folderWatcher.on("add", async (filePath) => {
+    const ext = path.extname(filePath).toLowerCase();
+    
+    if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+      return;
+    }
+
+    // ส่ง event ไปยัง renderer process
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("new-image-detected", {
+        folderPath: reportRootPath,
+        fileName: path.basename(filePath),
+        filePath
+      });
+    }
+  });
+}
+
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 860,
     webPreferences: {
@@ -351,6 +451,23 @@ ipcMain.handle("rename-xray-files", async (_event, payload) => {
   return renameXrayFilesByMode(payload?.mode, payload?.reportRootPath);
 });
 
+ipcMain.handle("detect-vendor-type", async (_event, reportRootPath) => {
+  return detectVendorType(reportRootPath);
+});
+
+ipcMain.handle("start-watching-folder", async (_event, reportRootPath) => {
+  startWatchingFolder(reportRootPath);
+  return true;
+});
+
+ipcMain.handle("stop-watching-folder", async () => {
+  if (folderWatcher) {
+    folderWatcher.close();
+    folderWatcher = null;
+  }
+  return true;
+});
+
 app.whenReady().then(() => {
   createWindow();
 
@@ -377,4 +494,10 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", (e) => {
   e.preventDefault();
+  
+  // ปิด watcher
+  if (folderWatcher) {
+    folderWatcher.close();
+    folderWatcher = null;
+  }
 });

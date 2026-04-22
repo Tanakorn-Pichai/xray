@@ -263,7 +263,6 @@
 
         <div class="actions">
           <button id="selectFolderButton" class="secondary">เลือกโฟลเดอร์</button>
-          <button id="runButton" class="primary" disabled>เริ่มเปลี่ยนชื่อไฟล์</button>
         </div>
 
         <div class="path-box">
@@ -337,7 +336,6 @@
       };
 
       const selectFolderButton = document.getElementById("selectFolderButton");
-      const runButton = document.getElementById("runButton");
       const selectedPath = document.getElementById("selectedPath");
       const statusBox = document.getElementById("status");
       const metricOneLabel = document.getElementById("metricOneLabel");
@@ -358,6 +356,38 @@
       function setStatus(message, type = "info") {
         statusBox.textContent = message;
         statusBox.className = `status ${type}`;
+      }
+
+      function saveLastPath(path) {
+        localStorage.setItem("lastReportPath", path);
+      }
+
+      function getLastPath() {
+        return localStorage.getItem("lastReportPath") || "";
+      }
+
+      function loadSavedPath() {
+        const lastPath = getLastPath();
+        if (lastPath) {
+          currentReportPath = lastPath;
+          selectedPath.textContent = lastPath;
+          
+          // เริ่มตรวจจับไฟล์ใหม่
+          window.xrayApp.startWatchingFolder(lastPath).catch(err => {
+            console.error("Error starting folder watch:", err);
+          });
+          
+          // ตรวจจับรูปแบบ
+          window.xrayApp.detectVendorType(lastPath).then(detectedVendor => {
+            if (detectedVendor) {
+              document.querySelector(`input[name="mode"][value="${detectedVendor}"]`).checked = true;
+              updateModeUI();
+              setStatus(`โหลดโฟลเดอร์ที่ใช้ล่าสุด - ตรวจพบ: ${detectedVendor === "vendor1" ? "ค่าย 1" : "ค่าย 2"}`, "success");
+            }
+          }).catch(err => {
+            console.error("Error detecting vendor:", err);
+          });
+        }
       }
 
       function renderList(element, items, type) {
@@ -393,10 +423,11 @@
           stepsList.appendChild(li);
         }
 
-        currentReportPath = "";
-        selectedPath.textContent = "ยังไม่ได้เลือกโฟลเดอร์";
-        runButton.disabled = true;
-        setStatus("เลือกโหมดเรียบร้อยแล้ว กรุณาเลือกโฟลเดอร์", "info");
+        if (currentReportPath) {
+          setStatus("พร้อมกำลังตรวจสอบไฟล์ใหม่", "success");
+        } else {
+          setStatus("เลือกโหมดเรียบร้อยแล้ว กรุณาเลือกโฟลเดอร์", "info");
+        }
 
         updateSummary({
           mode: selectedMode,
@@ -456,22 +487,32 @@
 
           currentReportPath = folderPath;
           selectedPath.textContent = folderPath;
-          runButton.disabled = false;
-          setStatus("เลือกโฟลเดอร์เรียบร้อยแล้ว พร้อมเริ่มเปลี่ยนชื่อไฟล์", "success");
+          saveLastPath(folderPath);
+          
+          // เริ่มตรวจจับไฟล์ใหม่
+          await window.xrayApp.startWatchingFolder(folderPath);
+          
+          // ตรวจจับรูปแบบทันที
+          const detectedVendor = await window.xrayApp.detectVendorType(folderPath);
+          if (detectedVendor) {
+            document.querySelector(`input[name="mode"][value="${detectedVendor}"]`).checked = true;
+            updateModeUI();
+            setStatus(`ตรวจพบ: ${detectedVendor === "vendor1" ? "ค่าย 1" : "ค่าย 2"} - กำลังตรวจสอบไฟล์ใหม่`, "success");
+          } else {
+            setStatus("โปรดเลือกโหมดด้วยตนเองและรอไฟล์ใหม่", "info");
+          }
         } catch (error) {
           setStatus(`เกิดข้อผิดพลาดในการเลือกโฟลเดอร์: ${error.message}`, "error");
         }
       });
 
-      runButton.addEventListener("click", async () => {
+      async function autoRenameImages() {
         const selectedMode = getSelectedMode();
 
         if (!currentReportPath) {
-          setStatus("กรุณาเลือกโฟลเดอร์ก่อน", "error");
           return;
         }
 
-        runButton.disabled = true;
         selectFolderButton.disabled = true;
         setStatus(
           selectedMode === "vendor2"
@@ -495,12 +536,18 @@
         } catch (error) {
           setStatus(`เกิดข้อผิดพลาด: ${error.message}`, "error");
         } finally {
-          runButton.disabled = false;
           selectFolderButton.disabled = false;
         }
+      }
+
+      // Listen for new images
+      window.xrayApp.onNewImageDetected(async (data) => {
+        setStatus(`📸 พบไฟล์รูปใหม่: ${data.fileName} - กำลังเปลี่ยนชื่อ...`, "info");
+        await autoRenameImages();
       });
 
       updateModeUI();
+      loadSavedPath();
     </script>
   </body>
 </html>
