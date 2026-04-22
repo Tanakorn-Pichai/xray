@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu } = require("electron");const fs = require("fs");
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu } = require("electron");
+const fs = require("fs");
 const path = require("path");
 const Tesseract = require("tesseract.js");
 const sharp = require("sharp");
@@ -8,7 +9,14 @@ app.disableHardwareAcceleration();
 
 let tray = null;
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
-  ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".pdf", ".webp",
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".bmp",
+  ".tif",
+  ".tiff",
+  ".pdf",
+  ".webp",
 ]);
 
 let mainWindow = null;
@@ -24,7 +32,8 @@ function isDirectory(targetPath) {
 
 function getFiles(targetPath) {
   try {
-    return fs.readdirSync(targetPath, { withFileTypes: true })
+    return fs
+      .readdirSync(targetPath, { withFileTypes: true })
       .filter((entry) => entry.isFile())
       .map((entry) => ({
         name: entry.name,
@@ -43,7 +52,8 @@ function getImageFiles(targetPath) {
 
 function getDirectories(targetPath) {
   try {
-    return fs.readdirSync(targetPath, { withFileTypes: true })
+    return fs
+      .readdirSync(targetPath, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => ({
         name: entry.name,
@@ -89,9 +99,12 @@ async function safeUnlink(filePath, maxRetries = 3) {
     } catch (err) {
       if (i < maxRetries - 1) {
         // รอ 100ms แล้วลองใหม่
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       } else {
-        console.warn(`Failed to delete ${filePath} after ${maxRetries} retries:`, err.message);
+        console.warn(
+          `Failed to delete ${filePath} after ${maxRetries} retries:`,
+          err.message,
+        );
       }
     }
   }
@@ -123,8 +136,8 @@ function extractHN(rawText) {
 
   const lines = rawText
     .split("\n")
-    .map(l => l.trim())
-    .filter(l => l.length > 0);
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
   if (lines.length < 1) return null;
 
   let line = lines[0];
@@ -139,7 +152,6 @@ function extractHN(rawText) {
   return line || null;
 }
 
-
 async function runOCR(imagePath) {
   // ตรวจสอบว่าไฟล์มีอยู่จริง
   if (!fs.existsSync(imagePath)) {
@@ -147,7 +159,7 @@ async function runOCR(imagePath) {
   }
 
   // รอให้ไฟล์เขียนเสร็จสมบูรณ์
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await new Promise((resolve) => setTimeout(resolve, 500));
 
   return Tesseract.recognize(imagePath, "eng", {
     tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
@@ -159,11 +171,20 @@ async function runOCR(imagePath) {
 function renameUsingHN(directoryPath, imageFile, hn, metadata = {}) {
   const extension = path.extname(imageFile.name);
   const nameWithoutExt = path.parse(imageFile.name).name;
-  
+
+  // ถ้าชื่อไฟล์เป็น HN อยู่แล้วไม่ต้องทำอะไร
   if (nameWithoutExt === hn) {
     return {
       type: "skipped",
       item: { reason: "ชื่อไฟล์ตรงกับรหัส DX แล้ว", path: imageFile.path },
+    };
+  }
+
+  // ป้องกัน loop rename เช่น HN_1.jpg
+  if (nameWithoutExt.startsWith(hn)) {
+    return {
+      type: "skipped",
+      item: { reason: "ไฟล์ถูก rename แล้ว", path: imageFile.path },
     };
   }
 
@@ -182,24 +203,54 @@ function renameUsingHN(directoryPath, imageFile, hn, metadata = {}) {
   };
 }
 
-async function renameVendor2XrayFiles(reportRootPath) {
+async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
+
   const backupPath = path.join(reportRootPath, "Backup");
+
   if (!fs.existsSync(backupPath)) {
     fs.mkdirSync(backupPath, { recursive: true });
   }
 
-  const imageFiles = getImageFiles(reportRootPath);
+  let imageFiles = [];
+
+  // ถ้ามีไฟล์ที่ส่งมาเฉพาะ
+  if (specificFile) {
+    imageFiles.push({
+      name: path.basename(specificFile),
+      path: specificFile,
+    });
+  } else {
+    imageFiles = getImageFiles(reportRootPath).filter(
+      (file) =>
+        !file.path.includes("Backup") &&
+        !file.name.includes("_ocr")
+    );
+  }
+
   const renamedItems = [];
   const skippedItems = [];
 
   for (const imageFile of imageFiles) {
+    const nameWithoutExt = path.parse(imageFile.name).name;
+
+    // ข้ามไฟล์ที่ rename แล้ว
+    if (/^[A-Z0-9]+$/.test(nameWithoutExt) && nameWithoutExt.length >= 4) {
+      continue;
+    }
+
     let tempOcrFile = null;
+
     try {
+      // รอไฟล์เขียนเสร็จ
+      await new Promise((r) => setTimeout(r, 800));
+
       const buffer = fs.readFileSync(imageFile.path);
+
       const { width, height } = imageSize(buffer);
+
       const cropArea = {
         left: 0,
         top: Math.floor(height * 0.09),
@@ -207,8 +258,7 @@ async function renameVendor2XrayFiles(reportRootPath) {
         height: Math.floor(height * 0.04),
       };
 
-      const temp = imageFile.path + "_ocr.jpg";
-      tempOcrFile = temp;
+      tempOcrFile = imageFile.path + "_ocr.jpg";
 
       await sharp(imageFile.path)
         .extract(cropArea)
@@ -218,9 +268,9 @@ async function renameVendor2XrayFiles(reportRootPath) {
         .sharpen({ sigma: 2.5 })
         .modulate({ contrast: 10, brightness: 0.2 })
         .negate()
-        .toFile(temp);
+        .toFile(tempOcrFile);
 
-      const ocr = await runOCR(temp);
+      const ocr = await runOCR(tempOcrFile);
       const text = ocr?.data?.text || "";
 
       let hn = extractHN(text);
@@ -236,7 +286,10 @@ async function renameVendor2XrayFiles(reportRootPath) {
       }
 
       const backupFile = path.join(backupPath, imageFile.name);
-      fs.copyFileSync(imageFile.path, backupFile);
+
+      if (!fs.existsSync(backupFile)) {
+        fs.copyFileSync(imageFile.path, backupFile);
+      }
 
       const result = renameUsingHN(reportRootPath, imageFile, hn, {
         ocrPreview: text.slice(0, 100),
@@ -274,11 +327,6 @@ async function renameVendor1XrayFiles(reportRootPath) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
 
-  const backupPath = path.join(reportRootPath, "Backup");
-  if (!fs.existsSync(backupPath)) {
-    fs.mkdirSync(backupPath, { recursive: true });
-  }
-
   const dateFolders = getDirectories(reportRootPath);
   const renamedItems = [];
   const skippedItems = [];
@@ -308,6 +356,12 @@ async function renameVendor1XrayFiles(reportRootPath) {
       }
 
       for (const petFolder of petFolders) {
+        const backupPath = path.join(petFolder.path, "Backup");
+
+        if (!fs.existsSync(backupPath)) {
+          fs.mkdirSync(backupPath, { recursive: true });
+        }
+
         const imageFiles = getImageFiles(petFolder.path);
 
         if (imageFiles.length === 0) {
@@ -319,10 +373,19 @@ async function renameVendor1XrayFiles(reportRootPath) {
         }
 
         for (const imageFile of imageFiles) {
-          // Backup ก่อนเปลี่ยนชื่อ
-          const backupFile = path.join(backupPath, imageFile.name);
+          // ไม่เอาไฟล์ใน Backup
+          if (imageFile.path.includes("Backup")) continue;
+
           try {
-            fs.copyFileSync(imageFile.path, backupFile);
+            const extension = path.extname(imageFile.name);
+
+            const uniqueBackup = buildUniqueFilePath(
+              backupPath,
+              path.parse(imageFile.name).name,
+              extension,
+            );
+
+            fs.copyFileSync(imageFile.path, uniqueBackup.fullPath);
           } catch (err) {
             skippedItems.push({
               reason: `Backup ล้มเหลว: ${err.message}`,
@@ -349,8 +412,6 @@ async function renameVendor1XrayFiles(reportRootPath) {
   return {
     mode: "vendor1",
     reportRootPath,
-    backupPath,
-    dateFolderCount: dateFolders.length,
     renamedItems,
     skippedItems,
   };
@@ -381,11 +442,11 @@ function detectVendorType(reportRootPath) {
 
   // ตรวจสอบ vendor1: โครงสร้าง date folders → HN folders → image files
   const topLevelDirs = getDirectories(reportRootPath);
-  
+
   // ถ้ามี folder ที่ดูเหมือน date format
   for (const dir of topLevelDirs) {
     const subDirs = getDirectories(dir.path);
-    
+
     // vendor1 ต้องมี HN folders อย่างน้อย 1 folder
     if (subDirs.length > 0) {
       for (const subDir of subDirs) {
@@ -421,16 +482,19 @@ function startWatchingFolder(reportRootPath) {
   let vendorType = detectVendorType(reportRootPath);
 
   folderWatcher = chokidar.watch(reportRootPath, {
-    ignored: /(^|[\/\\])\.|_ocr/,
+    ignored: /(^|[\/\\])\.|_ocr|Backup/,
     persistent: true,
     ignoreInitial: true,
     awaitWriteFinish: {
       stabilityThreshold: 1000,
-      pollInterval: 100
-    }
+      pollInterval: 100,
+    },
   });
 
   folderWatcher.on("add", async (filePath) => {
+    if (filePath.includes("Backup")) return;
+    if (filePath.includes("_ocr")) return;
+
     const ext = path.extname(filePath).toLowerCase();
     if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
       return;
@@ -442,7 +506,7 @@ function startWatchingFolder(reportRootPath) {
     try {
       if (vendorType === "vendor2") {
         // เปลี่ยนชื่อและ backup ทันที
-        await renameVendor2XrayFiles(reportRootPath);
+        await renameVendor2XrayFiles(reportRootPath, filePath);
       } else if (vendorType === "vendor1") {
         await renameVendor1XrayFiles(reportRootPath);
       }
@@ -456,7 +520,7 @@ function startWatchingFolder(reportRootPath) {
       mainWindow.webContents.send("new-image-detected", {
         folderPath: reportRootPath,
         fileName: path.basename(filePath),
-        filePath
+        filePath,
       });
     }
   });
@@ -535,14 +599,14 @@ app.whenReady().then(() => {
       label: "เปิดโปรแกรม",
       click: () => {
         createWindow();
-      }
+      },
     },
     {
       label: "ออกจากโปรแกรม",
       click: () => {
         app.quit();
-      }
-    }
+      },
+    },
   ]);
 
   tray.setToolTip("Xray Renamer");
@@ -551,7 +615,7 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", (e) => {
   e.preventDefault();
-  
+
   // ปิด watcher
   if (folderWatcher) {
     folderWatcher.close();
