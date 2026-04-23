@@ -1,19 +1,14 @@
-// main.js
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const fs = require("fs");
 const path = require("path");
+const chokidar = require("chokidar");
 const Tesseract = require("tesseract.js");
 const sharp = require("sharp");
 const { imageSize } = require("image-size");
-const chokidar = require("chokidar");
 
-app.disableHardwareAcceleration();
-
-let tray = null;
 let mainWindow = null;
 let folderWatcher = null;
 let isQuitting = false;
-
 let processingQueue = Promise.resolve();
 let isInitialScanRunning = false;
 
@@ -29,7 +24,7 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set([
 ]);
 
 const GENERATED_PATH_TTL_MS = 10 * 60 * 1000; // 10 นาที
-const generatedPaths = new Map(); // path -> expiry timestamp
+const generatedPaths = new Map(); // resolvedPath -> expiry timestamp
 const processingFiles = new Set();
 
 function isDirectory(targetPath) {
@@ -87,16 +82,12 @@ function walkImageFilesRecursive(targetPath, collected = []) {
   }
 
   for (const entry of entries) {
-    if (entry.name.startsWith(".")) {
-      continue;
-    }
+    if (entry.name.startsWith(".")) continue;
 
     const fullPath = path.join(targetPath, entry.name);
 
     if (entry.isDirectory()) {
-      if (entry.name === "Backup" || entry.name.includes("_ocr")) {
-        continue;
-      }
+      if (entry.name === "Backup" || entry.name.includes("_ocr")) continue;
       walkImageFilesRecursive(fullPath, collected);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
@@ -144,15 +135,10 @@ function extractNumericHN(rawText) {
     .replace(/\s+/g, " ")
     .trim();
 
-  if (!normalizedText) {
-    return null;
-  }
+  if (!normalizedText) return null;
 
   const matches = normalizedText.match(/\d{4,}/g);
-
-  if (!matches || matches.length === 0) {
-    return null;
-  }
+  if (!matches || matches.length === 0) return null;
 
   return matches.sort((a, b) => b.length - a.length)[0];
 }
@@ -566,7 +552,7 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
     );
 
     const text = extracted.text;
-    let hn = extracted.hn;
+    const hn = extracted.hn;
 
     if (!hn) {
       return {
@@ -664,7 +650,7 @@ async function processVendor1LikeImageByOCR(reportRootPath, imagePath) {
     );
 
     const text = extracted.text;
-    let hn = extracted.hn;
+    const hn = extracted.hn;
 
     if (!hn) {
       return {
@@ -745,11 +731,7 @@ async function processAutoImageFile(reportRootPath, imagePath) {
     return vendor2Result;
   }
 
-  const fallbackResult = await processVendor1LikeImageByOCR(
-    reportRootPath,
-    imagePath,
-  );
-  return fallbackResult;
+  return processVendor1LikeImageByOCR(reportRootPath, imagePath);
 }
 
 async function renameAutoXrayFiles(reportRootPath) {
@@ -1055,10 +1037,7 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "index.html"));
 
   mainWindow.on("close", (event) => {
-    if (isQuitting) {
-      return;
-    }
-
+    if (isQuitting) return;
     event.preventDefault();
     mainWindow.hide();
   });
@@ -1076,7 +1055,6 @@ ipcMain.handle("select-report-folder", async () => {
   });
 
   if (result.canceled) return null;
-
   return result.filePaths[0];
 });
 
@@ -1098,37 +1076,12 @@ ipcMain.handle("stop-watching-folder", async () => {
   return true;
 });
 
+ipcMain.handle("run-initial-auto-scan", async (_event, reportRootPath) => {
+  return runInitialAutoScan(reportRootPath);
+});
+
 app.whenReady().then(() => {
   createWindow();
-
-  try {
-    tray = new Tray(path.join(__dirname, "x-ray.png"));
-
-    const contextMenu = Menu.buildFromTemplate([
-      {
-        label: "เปิดโปรแกรม",
-        click: () => {
-          showMainWindow();
-        },
-      },
-      {
-        label: "ออกจากโปรแกรม",
-        click: async () => {
-          isQuitting = true;
-          await closeFolderWatcher();
-          app.quit();
-        },
-      },
-    ]);
-
-    tray.setToolTip("Xray Renamer");
-    tray.setContextMenu(contextMenu);
-    tray.on("click", () => {
-      showMainWindow();
-    });
-  } catch (err) {
-    console.warn("Tray initialization failed:", err.message);
-  }
 });
 
 app.on("before-quit", async () => {

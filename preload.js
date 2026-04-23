@@ -1,4 +1,3 @@
-// preload.js
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("xrayApp", {
@@ -9,6 +8,8 @@ contextBridge.exposeInMainWorld("xrayApp", {
   startWatchingFolder: (reportRootPath) =>
     ipcRenderer.invoke("start-watching-folder", reportRootPath),
   stopWatchingFolder: () => ipcRenderer.invoke("stop-watching-folder"),
+  runInitialAutoScan: (reportRootPath) =>
+    ipcRenderer.invoke("run-initial-auto-scan", reportRootPath),
   onNewImageDetected: (callback) => {
     const listener = (_event, data) => callback(data);
     ipcRenderer.on("new-image-detected", listener);
