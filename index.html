@@ -270,8 +270,8 @@
       <section class="card hero">
         <h1>โปรแกรมเปลี่ยนชื่อไฟล์ Xray ตาม HN</h1>
         <p>
-          เลือกโฟลเดอร์หลักเพียงครั้งเดียว แล้วโปรแกรมจะสแกนและเฝ้าดูไฟล์ใหม่ให้อัตโนมัติ
-          ระบบนี้แยกอ่านรูปทีละไฟล์ได้ ไม่ยึดรูปแบบทั้งโฟลเดอร์
+          เลือกโฟลเดอร์หลักเพียงครั้งเดียว แล้วโปรแกรมจะสแกนรอบแรกให้จบก่อน
+          จากนั้นค่อยเฝ้าดูไฟล์ใหม่แบบอัตโนมัติ
         </p>
         <div class="mode-chip">
           <span id="watchDot" class="dot idle"></span>
@@ -282,7 +282,6 @@
       <section class="card stack">
         <div class="row">
           <button id="selectFolderButton" class="primary">เลือกโฟลเดอร์หลัก</button>
-          <button id="rescanButton" class="secondary" disabled>สแกนใหม่ทั้งโฟลเดอร์</button>
           <button id="stopWatchButton" class="danger" disabled>หยุดเฝ้าดู</button>
           <button id="clearLogButton" class="secondary">ล้างบันทึก</button>
         </div>
@@ -326,7 +325,7 @@
         <h2>สรุปผลล่าสุด</h2>
         <div class="grid-3">
           <div class="metric">
-            <div class="muted" id="metricOneLabel">จำนวนไฟล์ที่สแกนล่าสุด</div>
+            <div class="muted" id="metricOneLabel">จำนวนไฟล์ที่ประมวลผลล่าสุด</div>
             <strong id="metricOneValue">0</strong>
           </div>
           <div class="metric">
@@ -366,7 +365,6 @@
       const api = window.xrayApp;
 
       const selectFolderButton = document.getElementById("selectFolderButton");
-      const rescanButton = document.getElementById("rescanButton");
       const stopWatchButton = document.getElementById("stopWatchButton");
       const clearLogButton = document.getElementById("clearLogButton");
 
@@ -404,7 +402,6 @@
       }
 
       function syncButtons() {
-        rescanButton.disabled = !currentReportPath;
         stopWatchButton.disabled = !watchingActive;
       }
 
@@ -451,7 +448,7 @@
           "กดเลือกโฟลเดอร์หลักของงาน",
           "รอโปรแกรมสแกนรอบแรกให้เสร็จ",
           "จากนั้นวางรูปใหม่เข้าไปในโฟลเดอร์เดิมได้เลย",
-          "ถ้ามีไฟล์เก่าค้างอยู่ ให้กดสแกนใหม่ทั้งโฟลเดอร์",
+          "ถ้ามีไฟล์เก่าค้างอยู่ ให้เลือกโฟลเดอร์เดิมใหม่อีกครั้งเพื่อสแกนรอบแรกซ้ำ",
         ];
 
         if (vendor === "vendor1") {
@@ -506,7 +503,7 @@
       }
 
       function updateSummary(result) {
-        metricOneLabel.textContent = "จำนวนไฟล์ที่สแกนล่าสุด";
+        metricOneLabel.textContent = "จำนวนไฟล์ที่ประมวลผลล่าสุด";
         metricOneValue.textContent = String(result?.imageFileCount || 0);
         renamedCount.textContent = String(result?.renamedItems?.length || 0);
         skippedCount.textContent = String(result?.skippedItems?.length || 0);
@@ -553,24 +550,27 @@
         syncButtons();
       }
 
-      async function openFolder(folderPath, doRescan = true) {
+      async function openFolder(folderPath) {
         currentReportPath = folderPath;
         selectedPath.textContent = folderPath;
         saveLastPath(folderPath);
 
+        await stopWatching();
         await refreshVendorAndUI(folderPath);
-        await startWatching(folderPath);
 
-        if (doRescan) {
-          setStatus("กำลังสแกนไฟล์ที่มีอยู่ในโฟลเดอร์...", "info");
-          appendEvent(`เริ่มสแกนโฟลเดอร์: ${folderPath}`, "info");
+        setStatus("กำลังสแกนไฟล์ที่มีอยู่ในโฟลเดอร์...", "info");
+        appendEvent(`เริ่มสแกนโฟลเดอร์: ${folderPath}`, "info");
 
+        try {
           const result = await api.renameXrayFiles({
             mode: "auto",
             reportRootPath: folderPath,
           });
 
           updateSummary(result);
+
+          await startWatching(folderPath);
+
           setStatus(
             `สแกนเสร็จสิ้น: เปลี่ยนชื่อ ${result.renamedItems.length} ไฟล์ และข้าม ${result.skippedItems.length} รายการ`,
             "success",
@@ -579,9 +579,9 @@
             `สแกนเสร็จ: renamed=${result.renamedItems.length}, skipped=${result.skippedItems.length}`,
             "success",
           );
-        } else {
-          setStatus("โหลดโฟลเดอร์ล่าสุดสำเร็จ และเริ่มเฝ้าดูไฟล์ใหม่แล้ว", "success");
-          appendEvent(`โหลดโฟลเดอร์ล่าสุด: ${folderPath}`, "success");
+        } catch (error) {
+          setStatus(`เกิดข้อผิดพลาดในการสแกน: ${error.message}`, "error");
+          appendEvent(`สแกนล้มเหลว: ${error.message}`, "skipped");
         }
 
         syncButtons();
@@ -599,43 +599,10 @@
             return;
           }
 
-          await openFolder(folderPath, true);
+          await openFolder(folderPath);
         } catch (error) {
           setStatus(`เกิดข้อผิดพลาดในการเลือกโฟลเดอร์: ${error.message}`, "error");
           appendEvent(`ผิดพลาด: ${error.message}`, "skipped");
-        }
-      });
-
-      rescanButton.addEventListener("click", async () => {
-        if (!currentReportPath) {
-          setStatus("ยังไม่ได้เลือกโฟลเดอร์", "warning");
-          return;
-        }
-
-        rescanButton.disabled = true;
-        setStatus("กำลังสแกนใหม่ทั้งโฟลเดอร์...", "info");
-        appendEvent("เริ่มสแกนใหม่ทั้งโฟลเดอร์", "info");
-
-        try {
-          const result = await api.renameXrayFiles({
-            mode: "auto",
-            reportRootPath: currentReportPath,
-          });
-
-          updateSummary(result);
-          setStatus(
-            `สแกนเสร็จสิ้น: เปลี่ยนชื่อ ${result.renamedItems.length} ไฟล์ และข้าม ${result.skippedItems.length} รายการ`,
-            "success",
-          );
-          appendEvent(
-            `สแกนเสร็จ: renamed=${result.renamedItems.length}, skipped=${result.skippedItems.length}`,
-            "success",
-          );
-        } catch (error) {
-          setStatus(`เกิดข้อผิดพลาด: ${error.message}`, "error");
-          appendEvent(`สแกนล้มเหลว: ${error.message}`, "skipped");
-        } finally {
-          syncButtons();
         }
       });
 
@@ -673,9 +640,7 @@
         selectedPath.textContent = lastPath;
 
         try {
-          await refreshVendorAndUI(lastPath);
-          await startWatching(lastPath);
-          setStatus("โหลดโฟลเดอร์ล่าสุดสำเร็จ และเริ่มเฝ้าดูไฟล์ใหม่แล้ว", "success");
+          await openFolder(lastPath);
           appendEvent(`โหลดโฟลเดอร์ล่าสุด: ${lastPath}`, "success");
         } catch (error) {
           setStatus(`โหลดโฟลเดอร์ล่าสุดไม่สำเร็จ: ${error.message}`, "error");
@@ -689,7 +654,6 @@
         if (!api) {
           setStatus("ไม่พบ bridge ของโปรแกรม", "error");
           selectFolderButton.disabled = true;
-          rescanButton.disabled = true;
           stopWatchButton.disabled = true;
           return;
         }

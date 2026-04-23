@@ -1,3 +1,4 @@
+// main.js
 const { app, BrowserWindow, ipcMain, dialog, Tray, Menu } = require("electron");
 const fs = require("fs");
 const path = require("path");
@@ -9,6 +10,12 @@ const chokidar = require("chokidar");
 app.disableHardwareAcceleration();
 
 let tray = null;
+let mainWindow = null;
+let folderWatcher = null;
+let isQuitting = false;
+
+let processingQueue = Promise.resolve();
+let isInitialScanRunning = false;
 
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   ".jpg",
@@ -21,11 +28,8 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   ".webp",
 ]);
 
-let mainWindow = null;
-let folderWatcher = null;
-let isQuitting = false;
-let processingQueue = Promise.resolve();
-const generatedPaths = new Set();
+const GENERATED_PATH_TTL_MS = 10 * 60 * 1000; // 10 นาที
+const generatedPaths = new Map(); // path -> expiry timestamp
 const processingFiles = new Set();
 
 function isDirectory(targetPath) {
@@ -184,16 +188,26 @@ function isOcrTempPath(filePath) {
 }
 
 function isGeneratedPath(filePath) {
-  return generatedPaths.has(path.resolve(filePath));
+  const resolved = path.resolve(filePath);
+  const expiresAt = generatedPaths.get(resolved);
+
+  if (!expiresAt) return false;
+
+  if (Date.now() > expiresAt) {
+    generatedPaths.delete(resolved);
+    return false;
+  }
+
+  return true;
 }
 
-function markGeneratedPath(filePath) {
+function markGeneratedPath(filePath, ttlMs = GENERATED_PATH_TTL_MS) {
   const resolved = path.resolve(filePath);
-  generatedPaths.add(resolved);
+  generatedPaths.set(resolved, Date.now() + ttlMs);
 
   const timer = setTimeout(() => {
     generatedPaths.delete(resolved);
-  }, 15000);
+  }, ttlMs + 1000);
 
   if (typeof timer.unref === "function") {
     timer.unref();
@@ -389,6 +403,7 @@ function renameUsingHN(directoryPath, imageFile, hn, metadata = {}) {
 
   const uniqueTarget = buildUniqueFilePath(directoryPath, hn, extension);
 
+  markGeneratedPath(imageFile.path);
   fs.renameSync(imageFile.path, uniqueTarget.fullPath);
   markGeneratedPath(uniqueTarget.fullPath);
 
@@ -531,8 +546,6 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
     fs.mkdirSync(backupPath, { recursive: true });
   }
 
-  let tempOcrFile = null;
-
   try {
     await new Promise((r) => setTimeout(r, 800));
 
@@ -551,6 +564,7 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
       cropArea,
       "_vendor2_ocr.jpg",
     );
+
     const text = extracted.text;
     let hn = extracted.hn;
 
@@ -592,10 +606,6 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
         path: imageFile.path,
       },
     };
-  } finally {
-    if (tempOcrFile) {
-      await safeUnlink(tempOcrFile);
-    }
   }
 }
 
@@ -931,7 +941,7 @@ async function closeFolderWatcher() {
 async function processFileSafely(reportRootPath, filePath) {
   const resolved = normalizePathSafe(filePath);
   if (processingFiles.has(resolved)) {
-    return;
+    return null;
   }
 
   processingFiles.add(resolved);
@@ -941,6 +951,41 @@ async function processFileSafely(reportRootPath, filePath) {
   } finally {
     processingFiles.delete(resolved);
   }
+}
+
+async function handleIncomingFile(reportRootPath, filePath) {
+  if (isInitialScanRunning) return;
+  if (!filePath) return;
+
+  if (isGeneratedPath(filePath)) return;
+  if (isBackupPath(filePath)) return;
+  if (isOcrTempPath(filePath)) return;
+
+  const ext = path.extname(filePath).toLowerCase();
+  if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+    return;
+  }
+
+  await enqueueTask(async () => {
+    try {
+      const result = await processFileSafely(reportRootPath, filePath);
+
+      if (
+        result &&
+        result.type === "renamed" &&
+        mainWindow &&
+        !mainWindow.isDestroyed()
+      ) {
+        mainWindow.webContents.send("new-image-detected", {
+          folderPath: reportRootPath,
+          fileName: path.basename(filePath),
+          filePath,
+        });
+      }
+    } catch (err) {
+      console.warn("Auto-rename error:", err.message);
+    }
+  });
 }
 
 async function startWatchingFolder(reportRootPath) {
@@ -955,37 +1000,26 @@ async function startWatchingFolder(reportRootPath) {
     persistent: true,
     ignoreInitial: true,
     awaitWriteFinish: {
-      stabilityThreshold: 1000,
+      stabilityThreshold: 1200,
       pollInterval: 100,
     },
   });
 
-  folderWatcher.on("add", (filePath) => {
-    enqueueTask(async () => {
-      if (isGeneratedPath(filePath)) return;
-      if (isBackupPath(filePath)) return;
-      if (isOcrTempPath(filePath)) return;
+  const onFileEvent = (filePath) => {
+    handleIncomingFile(reportRootPath, filePath);
+  };
 
-      const ext = path.extname(filePath).toLowerCase();
-      if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
-        return;
-      }
+  folderWatcher.on("add", onFileEvent);
+  folderWatcher.on("change", onFileEvent);
+}
 
-      try {
-        await processFileSafely(reportRootPath, filePath);
-      } catch (err) {
-        console.warn("Auto-rename error:", err.message);
-      }
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("new-image-detected", {
-          folderPath: reportRootPath,
-          fileName: path.basename(filePath),
-          filePath,
-        });
-      }
-    });
-  });
+async function runInitialAutoScan(reportRootPath) {
+  isInitialScanRunning = true;
+  try {
+    return await renameAutoXrayFiles(reportRootPath);
+  } finally {
+    isInitialScanRunning = false;
+  }
 }
 
 function showMainWindow() {
