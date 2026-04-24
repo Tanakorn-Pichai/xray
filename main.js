@@ -27,6 +27,7 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set([
 const GENERATED_PATH_TTL_MS = 10 * 60 * 1000; // 10 นาที
 const generatedPaths = new Map(); // resolvedPath -> expiry timestamp
 const processingFiles = new Set();
+
 function createTray() {
   const iconPath = path.join(__dirname, "x-ray.png");
   const icon = nativeImage.createFromPath(iconPath);
@@ -56,6 +57,7 @@ function createTray() {
     showMainWindow();
   });
 }
+
 function isDirectory(targetPath) {
   try {
     return fs.statSync(targetPath).isDirectory();
@@ -289,6 +291,52 @@ async function runOCR(imagePath) {
   });
 }
 
+function getImageOrientation(width, height) {
+  if (!width || !height) return "portrait";
+
+  const ratio = width / height;
+
+  // แนวนอนจริง ๆ เท่านั้น
+  // ถ้าเป็นภาพที่เกือบตั้งหรือกึ่งตั้ง ให้ยังใช้ crop เดิม
+  return ratio >= 1.15 ? "landscape" : "portrait";
+}
+
+function buildVendor2CropArea(width, height, orientation) {
+  if (orientation === "landscape") {
+    return {
+      left: 0,
+      top: Math.max(1, Math.floor(height * 0.04)),
+      width: Math.max(1, Math.floor(width * 0.30)),
+      height: Math.max(1, Math.floor(height * 0.16)),
+    };
+  }
+
+  return {
+    left: 0,
+    top: Math.floor(height * 0.09),
+    width: Math.max(1, Math.floor(width * 0.15)),
+    height: Math.max(1, Math.floor(height * 0.04)),
+  };
+}
+
+function buildFallbackCropArea(width, height, orientation) {
+  if (orientation === "landscape") {
+    return {
+      left: 0,
+      top: Math.max(1, Math.floor(height * 0.02)),
+      width: Math.max(1, Math.floor(width * 0.45)),
+      height: Math.max(1, Math.floor(height * 0.22)),
+    };
+  }
+
+  return {
+    left: 0,
+    top: 0,
+    width: Math.max(1, Math.floor(width * 0.45)),
+    height: Math.max(1, Math.floor(height * 0.35)),
+  };
+}
+
 async function extractHnFromCrop(imagePath, cropArea, tempSuffix) {
   let tempFile = null;
 
@@ -320,6 +368,28 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix) {
       // await safeUnlink(tempFile);
     }
   }
+}
+
+async function extractHnByOrientation(imagePath, width, height, mode = "vendor2") {
+  const orientation = getImageOrientation(width, height);
+
+  if (mode === "vendor2") {
+    const cropArea = buildVendor2CropArea(width, height, orientation);
+
+    if (orientation === "landscape") {
+      return extractHnFromCrop(imagePath, cropArea, "_vendor2_ocr_landscape.jpg");
+    }
+
+    return extractHnFromCrop(imagePath, cropArea, "_vendor2_ocr.jpg");
+  }
+
+  const cropArea = buildFallbackCropArea(width, height, orientation);
+
+  if (orientation === "landscape") {
+    return extractHnFromCrop(imagePath, cropArea, "_fallback_ocr_landscape.jpg");
+  }
+
+  return extractHnFromCrop(imagePath, cropArea, "_fallback_ocr.jpg");
 }
 
 function resolveVendor1ContextFromFilePath(reportRootPath, imagePath) {
@@ -566,18 +636,13 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
 
     const buffer = fs.readFileSync(imageFile.path);
     const { width, height } = imageSize(buffer);
+    const orientation = getImageOrientation(width, height);
 
-    const cropArea = {
-      left: 0,
-      top: Math.floor(height * 0.09),
-      width: Math.max(1, Math.floor(width * 0.15)),
-      height: Math.max(1, Math.floor(height * 0.04)),
-    };
-
-    const extracted = await extractHnFromCrop(
+    const extracted = await extractHnByOrientation(
       imageFile.path,
-      cropArea,
-      "_vendor2_ocr.jpg",
+      width,
+      height,
+      "vendor2",
     );
 
     const text = extracted.text;
@@ -589,6 +654,7 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
         item: {
           reason: "OCR หา HN ไม่พบ",
           path: imageFile.path,
+          orientation,
           ocrPreview: text.slice(0, 100),
         },
       };
@@ -602,6 +668,7 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
 
     const result = renameUsingHN(path.dirname(imageFile.path), imageFile, hn, {
       mode: "vendor2",
+      orientation,
       ocrPreview: text.slice(0, 100),
     });
 
@@ -664,18 +731,13 @@ async function processVendor1LikeImageByOCR(reportRootPath, imagePath) {
   try {
     const buffer = fs.readFileSync(imageFile.path);
     const { width, height } = imageSize(buffer);
+    const orientation = getImageOrientation(width, height);
 
-    const cropArea = {
-      left: 0,
-      top: 0,
-      width: Math.max(1, Math.floor(width * 0.45)),
-      height: Math.max(1, Math.floor(height * 0.35)),
-    };
-
-    const extracted = await extractHnFromCrop(
+    const extracted = await extractHnByOrientation(
       imageFile.path,
-      cropArea,
-      "_fallback_ocr.jpg",
+      width,
+      height,
+      "fallback",
     );
 
     const text = extracted.text;
@@ -687,6 +749,7 @@ async function processVendor1LikeImageByOCR(reportRootPath, imagePath) {
         item: {
           reason: "OCR แบบค่าย 1 ไม่พบ HN",
           path: imageFile.path,
+          orientation,
           ocrPreview: text.slice(0, 100),
         },
       };
@@ -701,6 +764,7 @@ async function processVendor1LikeImageByOCR(reportRootPath, imagePath) {
     const result = renameUsingHN(path.dirname(imageFile.path), imageFile, hn, {
       mode: "vendor1",
       source: "ocr-fallback",
+      orientation,
       ocrPreview: text.slice(0, 100),
     });
 
@@ -1110,7 +1174,7 @@ ipcMain.handle("run-initial-auto-scan", async (_event, reportRootPath) => {
 });
 
 app.whenReady().then(() => {
-  //   app.setLoginItemSettings({
+  // app.setLoginItemSettings({
   //   openAtLogin: true
   // });
 
