@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const chokidar = require("chokidar");
@@ -7,6 +7,7 @@ const sharp = require("sharp");
 const { imageSize } = require("image-size");
 
 let mainWindow = null;
+let tray = null;
 let folderWatcher = null;
 let isQuitting = false;
 let processingQueue = Promise.resolve();
@@ -26,7 +27,35 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set([
 const GENERATED_PATH_TTL_MS = 10 * 60 * 1000; // 10 นาที
 const generatedPaths = new Map(); // resolvedPath -> expiry timestamp
 const processingFiles = new Set();
+function createTray() {
+  const iconPath = path.join(__dirname, "x-ray.png");
+  const icon = nativeImage.createFromPath(iconPath);
 
+  tray = new Tray(icon);
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: "Open Xray",
+      click: () => {
+        showMainWindow();
+      },
+    },
+    {
+      label: "Quit",
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+
+  tray.setToolTip("Xray OCR");
+  tray.setContextMenu(contextMenu);
+
+  tray.on("double-click", () => {
+    showMainWindow();
+  });
+}
 function isDirectory(targetPath) {
   try {
     return fs.statSync(targetPath).isDirectory();
@@ -288,7 +317,7 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix) {
     };
   } finally {
     if (tempFile) {
-      await safeUnlink(tempFile);
+      // await safeUnlink(tempFile);
     }
   }
 }
@@ -1081,7 +1110,12 @@ ipcMain.handle("run-initial-auto-scan", async (_event, reportRootPath) => {
 });
 
 app.whenReady().then(() => {
+  //   app.setLoginItemSettings({
+  //   openAtLogin: true
+  // });
+
   createWindow();
+  createTray();
 });
 
 app.on("before-quit", async () => {

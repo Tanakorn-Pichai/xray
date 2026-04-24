@@ -4,13 +4,35 @@
   "description": "Electron app",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
+  "build": {
+    "appId": "com.xray.ocr",
+    "productName": "XrayOCR",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "x-ray.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
   "devDependencies": {
-    "electron": "^35.1.4"
+    "electron": "^35.1.4",
+    "electron-builder": "^26.8.1"
   },
   "dependencies": {
     "chokidar": "^5.0.0",
