@@ -305,9 +305,9 @@ function buildVendor2CropArea(width, height, orientation) {
   if (orientation === "landscape") {
     return {
       left: 0,
-      top: Math.max(1, Math.floor(height * 0.04)),
-      width: Math.max(1, Math.floor(width * 0.30)),
-      height: Math.max(1, Math.floor(height * 0.16)),
+      top: Math.max(1, Math.floor(height * 0.12)),
+      width: Math.max(1, Math.floor(width * 0.15)),
+      height: Math.max(1, Math.floor(height * 0.04)),
     };
   }
 
@@ -323,9 +323,9 @@ function buildFallbackCropArea(width, height, orientation) {
   if (orientation === "landscape") {
     return {
       left: 0,
-      top: Math.max(1, Math.floor(height * 0.02)),
-      width: Math.max(1, Math.floor(width * 0.45)),
-      height: Math.max(1, Math.floor(height * 0.22)),
+      top: Math.max(1, Math.floor(height * 0.12)),
+      width: Math.max(1, Math.floor(width * 0.15)),
+      height: Math.max(1, Math.floor(height * 0.04)),
     };
   }
 
