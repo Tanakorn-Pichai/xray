@@ -370,6 +370,40 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix) {
   }
 }
 
+async function extractHnFromCropL(imagePath, cropArea, tempSuffix) {
+  let tempFile = null;
+
+  try {
+    tempFile = `${imagePath}${tempSuffix}`;
+
+    await sharp(imagePath)
+      .extract(cropArea)
+      .resize(
+        Math.max(1, cropArea.width * 3),
+        Math.max(1, cropArea.height * 3),
+      )
+      .grayscale()
+      .normalize()
+      // .sharpen({ sigma: 2.5 })
+      .modulate({ contrast: 10, brightness: 0.1 })
+      // .negate()
+      .median(1)
+      .toFile(tempFile);
+
+    const ocr = await runOCR(tempFile);
+    const text = ocr?.data?.text || "";
+
+    return {
+      hn: normalizeHN(extractHN(text) || extractNumericHN(text)),
+      text,
+    };
+  } finally {
+    if (tempFile) {
+      // await safeUnlink(tempFile);
+    }
+  }
+}
+
 async function extractHnByOrientation(imagePath, width, height, mode = "vendor2") {
   const orientation = getImageOrientation(width, height);
 
@@ -386,10 +420,10 @@ async function extractHnByOrientation(imagePath, width, height, mode = "vendor2"
   const cropArea = buildFallbackCropArea(width, height, orientation);
 
   if (orientation === "landscape") {
-    return extractHnFromCrop(imagePath, cropArea, "_fallback_ocr_landscape.jpg");
+    return extractHnFromCropL(imagePath, cropArea, "_fallback_ocr_landscape.jpg");
   }
 
-  return extractHnFromCrop(imagePath, cropArea, "_fallback_ocr.jpg");
+  return extractHnFromCropL(imagePath, cropArea, "_fallback_ocr.jpg");
 }
 
 function resolveVendor1ContextFromFilePath(reportRootPath, imagePath) {
