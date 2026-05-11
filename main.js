@@ -128,6 +128,10 @@ function normalizeHN(code) {
     .replace(/S/g, "5");
 }
 
+function isValidHNFormat(code) {
+  return /^[A-Z]{2,3}\d+$/.test(String(code || "").toUpperCase());
+}
+
 function extractNumericHN(rawText) {
   const normalizedText = String(rawText || "")
     .replace(/\r/g, " ")
@@ -162,7 +166,12 @@ function extractHN(rawText) {
     .replace(/S/g, "5")
     .replace(/[^A-Z0-9]/g, "");
 
-  return line || null;
+  if (!line) return null;
+
+  const candidates = line.match(/[A-Z]{2,3}\d+/g) || [];
+  if (candidates.length === 0) return null;
+
+  return candidates.sort((a, b) => b.length - a.length)[0];
 }
 
 function isBackupPath(filePath) {
@@ -282,8 +291,9 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix) {
     const ocr = await runOCR(tempFile);
     const text = ocr?.data?.text || "";
 
+    const normalizedHn = normalizeHN(extractHN(text));
     return {
-      hn: normalizeHN(extractHN(text) || extractNumericHN(text)),
+      hn: isValidHNFormat(normalizedHn) ? normalizedHn : null,
       text,
     };
   } finally {
