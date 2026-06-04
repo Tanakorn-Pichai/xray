@@ -11,6 +11,7 @@ let folderWatcher = null;
 let isQuitting = false;
 let processingQueue = Promise.resolve();
 let isInitialScanRunning = false;
+let currentHnConfig = null;
 
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   ".jpg",
@@ -174,6 +175,88 @@ function extractHN(rawText) {
   return candidates.sort((a, b) => b.length - a.length)[0];
 }
 
+function buildRegexFromRows(rows, capture) {
+  const groups = (rows || []).map((r) => {
+    if (r.type === "digit") return `\\d{${r.count}}`;
+    if (r.type === "custom" && r.chars) {
+      const escaped = r.chars.replace(/[^A-Z0-9]/g, "");
+      if (!escaped) return `[A-Z]{${r.count}}`;
+      return `[${escaped.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}]{${r.count}}`;
+    }
+    return `[A-Z]{${r.count}}`;
+  });
+  const inner = groups.join("");
+  return capture ? `(${inner})` : inner;
+}
+
+function hasCustomRows(rows) {
+  return (rows || []).some((r) => r.type === "custom" && r.chars);
+}
+
+function getCustomChars(rows) {
+  return (rows || [])
+    .filter((r) => r.type === "custom" && r.chars)
+    .map((r) => r.chars)
+    .join("");
+}
+
+function extractHNWithConfig(rawText, hnConfig) {
+  if (!rawText) return { hn: null, customNotFound: false };
+
+  const rows = hnConfig?.rows;
+  if (!rows || rows.length === 0) return { hn: null, customNotFound: false };
+
+  const lines = rawText
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (lines.length < 1) return { hn: null, customNotFound: false };
+
+  let line = lines[0];
+
+  line = line
+    .toUpperCase()
+    .replace(/O/g, "0")
+    .replace(/I/g, "1")
+    .replace(/S/g, "5")
+    .replace(/[^A-Z0-9]/g, "");
+
+  if (!line) return { hn: null, customNotFound: false };
+
+  const patternStr = buildRegexFromRows(rows, false);
+  const pattern = new RegExp(patternStr, "g");
+
+  const candidates = line.match(pattern) || [];
+  if (candidates.length === 0) {
+    return { hn: null, customNotFound: hasCustomRows(rows) };
+  }
+
+  const bestHN = candidates.sort((a, b) => b.length - a.length)[0];
+
+  if (hasCustomRows(rows)) {
+    const customChars = getCustomChars(rows);
+    const upperHN = bestHN.toUpperCase();
+    const allFound = customChars.split("").every((ch) => upperHN.includes(ch));
+    if (!allFound) {
+      return { hn: null, customNotFound: true };
+    }
+  }
+
+  return { hn: bestHN, customNotFound: false };
+}
+
+function isValidHNFormatWithConfig(code, hnConfig) {
+  const rows = hnConfig?.rows;
+  if (!rows || rows.length === 0) return false;
+
+  const upper = String(code || "").toUpperCase();
+  const regexStr = buildRegexFromRows(rows, false);
+  const regex = new RegExp(`^${regexStr}$`);
+
+  return regex.test(upper);
+}
+
 function isBackupPath(filePath) {
   return filePath.split(path.sep).includes("Backup");
 }
@@ -223,7 +306,22 @@ function isAlreadyTargetFile(nameWithoutExt, hn) {
 
 function isLikelyVendor2ProcessedFile(nameWithoutExt) {
   const upper = String(nameWithoutExt).toUpperCase();
-  return /^[A-Z0-9]{4,}(?:_\d+)?$/.test(upper);
+  return /^[A-Z]{2,3}\d{4,}(?:_\d+)?$/.test(upper);
+}
+
+function calculateCropArea(width, height, hnConfig) {
+  const cropPctW = hnConfig?.cropW ?? 0.15;
+  const cropPctH = hnConfig?.cropH ?? 0.04;
+  const cropW = Math.max(1, Math.floor(width * cropPctW));
+  const cropH = Math.max(1, Math.floor(height * cropPctH));
+
+  const cropX = hnConfig?.cropX ?? 0.075;
+  const cropY = hnConfig?.cropY ?? 0.11;
+
+  const left = Math.max(0, Math.min(width - cropW, Math.floor(cropX * width - cropW / 2)));
+  const top = Math.max(0, Math.min(height - cropH, Math.floor(cropY * height - cropH / 2)));
+
+  return { left, top, width: cropW, height: cropH };
 }
 
 function normalizePathSafe(targetPath) {
@@ -269,7 +367,7 @@ async function runOCR(imagePath) {
   });
 }
 
-async function extractHnFromCrop(imagePath, cropArea, tempSuffix) {
+async function extractHnFromCrop(imagePath, cropArea, tempSuffix, hnConfig = null) {
   let tempFile = null;
 
   try {
@@ -280,25 +378,38 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix) {
       .resize(
         Math.max(1, cropArea.width * 10),
         Math.max(1, cropArea.height * 10),
+        { fit: "fill" },
       )
       .grayscale()
       .normalize()
-      .sharpen({ sigma: 2.5 })
-      .modulate({ contrast: 10, brightness: 0.2 })
-      .negate()
+      .sharpen({ sigma: 0.8 })
       .toFile(tempFile);
 
     const ocr = await runOCR(tempFile);
     const text = ocr?.data?.text || "";
+    console.log("[OCR DEBUG] tempFile:", tempFile, "→ text:", JSON.stringify(text));
 
-    const normalizedHn = normalizeHN(extractHN(text));
-    return {
-      hn: isValidHNFormat(normalizedHn) ? normalizedHn : null,
-      text,
-    };
+    let normalizedHn;
+    if (hnConfig) {
+      const extractResult = extractHNWithConfig(text, hnConfig);
+      normalizedHn = normalizeHN(extractResult.hn);
+      const valid = isValidHNFormatWithConfig(normalizedHn, hnConfig);
+      return {
+        hn: valid ? normalizedHn : null,
+        customNotFound: !valid && extractResult.customNotFound,
+        customChars: !valid && extractResult.customNotFound ? getCustomChars(hnConfig.rows) : null,
+        text,
+      };
+    } else {
+      normalizedHn = normalizeHN(extractHN(text));
+      return {
+        hn: isValidHNFormat(normalizedHn) ? normalizedHn : null,
+        text,
+      };
+    }
   } finally {
     if (tempFile) {
-      await safeUnlink(tempFile);
+      // await safeUnlink(tempFile);
     }
   }
 }
@@ -497,7 +608,7 @@ async function processVendor1ImageFileFromContext(
   }
 }
 
-async function processVendor2ImageFile(reportRootPath, imagePath) {
+async function processVendor2ImageFile(reportRootPath, imagePath, hnConfig = null) {
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
@@ -548,21 +659,43 @@ async function processVendor2ImageFile(reportRootPath, imagePath) {
     const buffer = fs.readFileSync(imageFile.path);
     const { width, height } = imageSize(buffer);
 
-    const cropArea = {
-      left: 0,
-      top: Math.floor(height * 0.09),
-      width: Math.max(1, Math.floor(width * 0.15)),
-      height: Math.max(1, Math.floor(height * 0.04)),
-    };
+    const cropArea = calculateCropArea(width, height, hnConfig);
 
     const extracted = await extractHnFromCrop(
       imageFile.path,
       cropArea,
       "_vendor2_ocr.jpg",
+      hnConfig,
     );
 
     const text = extracted.text;
     const hn = extracted.hn;
+
+    if (!hn && extracted.customNotFound && extracted.customChars) {
+      const backupFile = path.join(backupPath, imageFile.name);
+      if (!fs.existsSync(backupFile)) {
+        fs.copyFileSync(imageFile.path, backupFile);
+        markGeneratedPath(backupFile);
+      }
+
+      const incompleteName = `${extracted.customChars}ไม่สมบูรณ์`;
+      const incompleteResult = renameUsingHN(path.dirname(imageFile.path), imageFile, incompleteName, {
+        mode: "vendor2",
+        ocrPreview: text.slice(0, 100),
+        isIncomplete: true,
+      });
+
+      return {
+        type: "renamed",
+        item: {
+          original: imageFile.name,
+          newName: incompleteResult.item?.newName || `${incompleteName}${path.extname(imageFile.name)}`,
+          path: incompleteResult.item?.path || imageFile.path,
+          ocrPreview: text.slice(0, 100),
+          isIncomplete: true,
+        },
+      };
+    }
 
     if (!hn) {
       return {
@@ -704,7 +837,7 @@ async function processVendor1LikeImageByOCR(reportRootPath, imagePath) {
   }
 }
 
-async function processAutoImageFile(reportRootPath, imagePath) {
+async function processAutoImageFile(reportRootPath, imagePath, hnConfig = null) {
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
@@ -733,10 +866,10 @@ async function processAutoImageFile(reportRootPath, imagePath) {
 
   const ctx = resolveVendor1ContextFromFilePath(reportRootPath, imagePath);
   if (ctx) {
-    return processVendor1ImageFileFromContext(reportRootPath, imagePath, ctx);
+    return await processVendor1ImageFileFromContext(reportRootPath, imagePath, ctx);
   }
 
-  const vendor2Result = await processVendor2ImageFile(reportRootPath, imagePath);
+  const vendor2Result = await processVendor2ImageFile(reportRootPath, imagePath, hnConfig);
   if (vendor2Result.type === "renamed") {
     return vendor2Result;
   }
@@ -744,7 +877,7 @@ async function processAutoImageFile(reportRootPath, imagePath) {
   return processVendor1LikeImageByOCR(reportRootPath, imagePath);
 }
 
-async function renameAutoXrayFiles(reportRootPath) {
+async function renameAutoXrayFiles(reportRootPath, hnConfig = null) {
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
@@ -760,7 +893,7 @@ async function renameAutoXrayFiles(reportRootPath) {
   const skippedItems = [];
 
   for (const imageFile of imageFiles) {
-    const result = await processAutoImageFile(reportRootPath, imageFile.path);
+    const result = await processAutoImageFile(reportRootPath, imageFile.path, hnConfig);
 
     if (result.type === "renamed") {
       renamedItems.push(result.item);
@@ -849,7 +982,7 @@ async function renameVendor1XrayFiles(reportRootPath, specificFile = null) {
   };
 }
 
-async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
+async function renameVendor2XrayFiles(reportRootPath, specificFile = null, hnConfig = null) {
   if (!reportRootPath || !isDirectory(reportRootPath)) {
     throw new Error("ไม่พบโฟลเดอร์ root");
   }
@@ -876,7 +1009,7 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   const skippedItems = [];
 
   for (const imageFile of imageFiles) {
-    const result = await processVendor2ImageFile(reportRootPath, imageFile.path);
+    const result = await processVendor2ImageFile(reportRootPath, imageFile.path, hnConfig);
 
     if (result.type === "renamed") {
       renamedItems.push(result.item);
@@ -895,16 +1028,18 @@ async function renameVendor2XrayFiles(reportRootPath, specificFile = null) {
   };
 }
 
-async function renameXrayFilesByMode(mode, reportRootPath) {
+async function renameXrayFilesByMode(mode, reportRootPath, hnConfig = null) {
+  currentHnConfig = hnConfig;
+
   if (mode === "vendor1") {
     return renameVendor1XrayFiles(reportRootPath);
   }
 
   if (mode === "vendor2") {
-    return renameVendor2XrayFiles(reportRootPath);
+    return renameVendor2XrayFiles(reportRootPath, null, hnConfig);
   }
 
-  return renameAutoXrayFiles(reportRootPath);
+  return renameAutoXrayFiles(reportRootPath, hnConfig);
 }
 
 async function enqueueTask(task) {
@@ -939,7 +1074,7 @@ async function processFileSafely(reportRootPath, filePath) {
   processingFiles.add(resolved);
 
   try {
-    return await processAutoImageFile(reportRootPath, filePath);
+    return await processAutoImageFile(reportRootPath, filePath, currentHnConfig);
   } finally {
     processingFiles.delete(resolved);
   }
@@ -1005,10 +1140,11 @@ async function startWatchingFolder(reportRootPath) {
   folderWatcher.on("change", onFileEvent);
 }
 
-async function runInitialAutoScan(reportRootPath) {
+async function runInitialAutoScan(reportRootPath, hnConfig = null) {
   isInitialScanRunning = true;
+  currentHnConfig = hnConfig;
   try {
-    return await renameAutoXrayFiles(reportRootPath);
+    return await renameAutoXrayFiles(reportRootPath, hnConfig);
   } finally {
     isInitialScanRunning = false;
   }
@@ -1046,12 +1182,6 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, "index.html"));
 
-  mainWindow.on("close", (event) => {
-    if (isQuitting) return;
-    event.preventDefault();
-    mainWindow.hide();
-  });
-
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -1069,7 +1199,7 @@ ipcMain.handle("select-report-folder", async () => {
 });
 
 ipcMain.handle("rename-xray-files", async (_event, payload) => {
-  return renameXrayFilesByMode(payload?.mode || "auto", payload?.reportRootPath);
+  return renameXrayFilesByMode(payload?.mode || "auto", payload?.reportRootPath, payload?.hnConfig || null);
 });
 
 ipcMain.handle("detect-vendor-type", async (_event, reportRootPath) => {
@@ -1086,8 +1216,8 @@ ipcMain.handle("stop-watching-folder", async () => {
   return true;
 });
 
-ipcMain.handle("run-initial-auto-scan", async (_event, reportRootPath) => {
-  return runInitialAutoScan(reportRootPath);
+ipcMain.handle("run-initial-auto-scan", async (_event, reportRootPath, hnConfig) => {
+  return runInitialAutoScan(reportRootPath, hnConfig);
 });
 
 app.whenReady().then(() => {
@@ -1099,8 +1229,6 @@ app.on("before-quit", async () => {
   await closeFolderWatcher();
 });
 
-app.on("window-all-closed", (e) => {
-  if (!isQuitting) {
-    e.preventDefault();
-  }
+app.on("window-all-closed", () => {
+  app.quit();
 });

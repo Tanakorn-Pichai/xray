@@ -8,8 +8,8 @@ contextBridge.exposeInMainWorld("xrayApp", {
   startWatchingFolder: (reportRootPath) =>
     ipcRenderer.invoke("start-watching-folder", reportRootPath),
   stopWatchingFolder: () => ipcRenderer.invoke("stop-watching-folder"),
-  runInitialAutoScan: (reportRootPath) =>
-    ipcRenderer.invoke("run-initial-auto-scan", reportRootPath),
+  runInitialAutoScan: (reportRootPath, hnConfig) =>
+    ipcRenderer.invoke("run-initial-auto-scan", reportRootPath, hnConfig),
   onNewImageDetected: (callback) => {
     const listener = (_event, data) => callback(data);
     ipcRenderer.on("new-image-detected", listener);
