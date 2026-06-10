@@ -20,7 +20,6 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   ".bmp",
   ".tif",
   ".tiff",
-  ".pdf",
   ".webp",
 ]);
 
@@ -148,28 +147,47 @@ function extractNumericHN(rawText) {
   return matches.sort((a, b) => b.length - a.length)[0];
 }
 
-function extractHN(rawText) {
-  if (!rawText) return null;
-
-  const lines = rawText
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-
-  if (lines.length < 1) return null;
-
-  let line = lines[0];
-
-  line = line
+function normalizeOcrText(rawText) {
+  const upperText = String(rawText || "")
     .toUpperCase()
     .replace(/O/g, "0")
     .replace(/I/g, "1")
-    .replace(/S/g, "5")
-    .replace(/[^A-Z0-9]/g, "");
+    .replace(/S/g, "5");
 
-  if (!line) return null;
+  const ocrFriendlyText = upperText.replace(
+    /D\s*[AXK\/\\|]?\s*([0-9ZEGSBU][0-9\s\-_.:ZEGSBU]{3,})/g,
+    (_match, digits) =>
+      `DX${digits
+        .replace(/[ZEGSBU]/g, (ch) => ({
+          Z: "2",
+          E: "6",
+          G: "6",
+          S: "5",
+          B: "8",
+          U: "0",
+        })[ch] || ch)
+        .replace(/\D/g, "")}`,
+  );
 
-  const candidates = line.match(/[A-Z]{2,3}\d+/g) || [];
+  const repairedDxText = ocrFriendlyText.replace(
+    /D\s*[XK\/\\|¥]\s*(\d[\d\s\-_.:]{3,})/g,
+    (_match, digits) => `DX${digits.replace(/\D/g, "")}`,
+  );
+
+  return repairedDxText.replace(/[^A-Z0-9]/g, "");
+}
+
+function extractHN(rawText) {
+  if (!rawText) return null;
+
+  const text = normalizeOcrText(rawText);
+
+  if (!text) return null;
+
+  const dxMatch = text.match(/DX\d{4,}/);
+  if (dxMatch) return dxMatch[0];
+
+  const candidates = text.match(/[A-Z]{2,3}\d{4,}/g) || [];
   if (candidates.length === 0) return null;
 
   return candidates.sort((a, b) => b.length - a.length)[0];
@@ -206,28 +224,18 @@ function extractHNWithConfig(rawText, hnConfig) {
   const rows = hnConfig?.rows;
   if (!rows || rows.length === 0) return { hn: null, customNotFound: false };
 
-  const lines = rawText
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+  const text = normalizeOcrText(rawText);
 
-  if (lines.length < 1) return { hn: null, customNotFound: false };
-
-  let line = lines[0];
-
-  line = line
-    .toUpperCase()
-    .replace(/O/g, "0")
-    .replace(/I/g, "1")
-    .replace(/S/g, "5")
-    .replace(/[^A-Z0-9]/g, "");
-
-  if (!line) return { hn: null, customNotFound: false };
+  if (!text) return { hn: null, customNotFound: false };
 
   const patternStr = buildRegexFromRows(rows, false);
   const pattern = new RegExp(patternStr, "g");
 
-  const candidates = line.match(pattern) || [];
+  let candidates = text.match(pattern) || [];
+  const dxMatch = text.match(/DX\d{4,}/);
+  if (dxMatch && new RegExp(`^${patternStr}$`).test(dxMatch[0])) {
+    candidates = [dxMatch[0], ...candidates];
+  }
   if (candidates.length === 0) {
     return { hn: null, customNotFound: hasCustomRows(rows) };
   }
@@ -324,6 +332,24 @@ function calculateCropArea(width, height, hnConfig) {
   return { left, top, width: cropW, height: cropH };
 }
 
+function calculateTopLeftTextArea(width, height) {
+  return {
+    left: 0,
+    top: 0,
+    width: Math.max(1, Math.floor(width * 0.18)),
+    height: Math.max(1, Math.floor(height * 0.2)),
+  };
+}
+
+function calculateWideTopLeftTextArea(width, height) {
+  return {
+    left: 0,
+    top: 0,
+    width: Math.max(1, Math.floor(width * 0.38)),
+    height: Math.max(1, Math.floor(height * 0.25)),
+  };
+}
+
 function normalizePathSafe(targetPath) {
   try {
     return path.resolve(targetPath);
@@ -360,11 +386,46 @@ async function runOCR(imagePath) {
 
   await new Promise((resolve) => setTimeout(resolve, 500));
 
-  return Tesseract.recognize(imagePath, "eng", {
-    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-    tessedit_pageseg_mode: 6,
-    tessedit_ocr_engine_mode: 1,
-  });
+  const worker = await Tesseract.createWorker("eng");
+  try {
+    await worker.setParameters({
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+    });
+    return await worker.recognize(imagePath);
+  } finally {
+    await worker.terminate();
+  }
+}
+
+function getOcrFilters(hnConfig) {
+  return {
+    threshold: hnConfig?.threshold ?? 255,
+    brightness: hnConfig?.brightness ?? 0,
+    contrast: hnConfig?.contrast ?? 1,
+    sharpen: hnConfig?.sharpen ?? 0.8,
+    normalize: hnConfig?.normalize ?? true,
+  };
+}
+
+function withLabelOcrFilters(hnConfig) {
+  const threshold = hnConfig?.threshold;
+  return {
+    ...(hnConfig || {}),
+    threshold: typeof threshold === "number" && threshold < 255 ? threshold : 140,
+    normalize: hnConfig?.normalize ?? true,
+  };
+}
+
+function withContrastLabelOcrFilters(hnConfig) {
+  return {
+    ...(hnConfig || {}),
+    threshold: 255,
+    brightness: -80,
+    contrast: 2,
+    sharpen: 1,
+    normalize: true,
+  };
 }
 
 async function extractHnFromCrop(imagePath, cropArea, tempSuffix, hnConfig = null) {
@@ -372,18 +433,34 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix, hnConfig = nul
 
   try {
     tempFile = `${imagePath}${tempSuffix}`;
+    const filters = getOcrFilters(hnConfig);
 
-    await sharp(imagePath)
+    let pipeline = sharp(imagePath)
       .extract(cropArea)
       .resize(
         Math.max(1, cropArea.width * 10),
         Math.max(1, cropArea.height * 10),
         { fit: "fill" },
       )
-      .grayscale()
-      .normalize()
-      .sharpen({ sigma: 0.8 })
-      .toFile(tempFile);
+      .grayscale();
+
+    if (filters.normalize) {
+      pipeline = pipeline.normalize();
+    }
+
+    if (filters.brightness !== 0 || filters.contrast !== 1) {
+      pipeline = pipeline.linear(filters.contrast, filters.brightness);
+    }
+
+    if (filters.sharpen > 0) {
+      pipeline = pipeline.sharpen({ sigma: filters.sharpen });
+    }
+
+    if (filters.threshold < 255) {
+      pipeline = pipeline.threshold(filters.threshold);
+    }
+
+    await pipeline.toFile(tempFile);
 
     const ocr = await runOCR(tempFile);
     const text = ocr?.data?.text || "";
@@ -661,12 +738,54 @@ async function processVendor2ImageFile(reportRootPath, imagePath, hnConfig = nul
 
     const cropArea = calculateCropArea(width, height, hnConfig);
 
-    const extracted = await extractHnFromCrop(
+    let extracted = await extractHnFromCrop(
       imageFile.path,
       cropArea,
       "_vendor2_ocr.jpg",
       hnConfig,
     );
+
+    if (!extracted.hn) {
+      const labelArea = calculateTopLeftTextArea(width, height);
+      const fallbackExtracted = await extractHnFromCrop(
+        imageFile.path,
+        labelArea,
+        "_vendor2_label_ocr.jpg",
+        withLabelOcrFilters(hnConfig),
+      );
+
+      if (fallbackExtracted.hn || !extracted.text) {
+        extracted = fallbackExtracted;
+      } else {
+        extracted = {
+          ...extracted,
+          customNotFound: extracted.customNotFound || fallbackExtracted.customNotFound,
+          customChars: extracted.customChars || fallbackExtracted.customChars,
+          text: `${extracted.text}\n${fallbackExtracted.text || ""}`,
+        };
+      }
+    }
+
+    if (!extracted.hn) {
+      const wideLabelArea = calculateWideTopLeftTextArea(width, height);
+      const contrastExtracted = await extractHnFromCrop(
+        imageFile.path,
+        wideLabelArea,
+        "_vendor2_label_contrast_ocr.jpg",
+        withContrastLabelOcrFilters(hnConfig),
+      );
+
+      if (contrastExtracted.hn || !extracted.text) {
+        extracted = contrastExtracted;
+      } else {
+        extracted = {
+          ...extracted,
+          customNotFound: extracted.customNotFound || contrastExtracted.customNotFound,
+          customChars: extracted.customChars || contrastExtracted.customChars,
+          text: `${extracted.text}\n${contrastExtracted.text || ""}`,
+        };
+      }
+    }
 
     const text = extracted.text;
     const hn = extracted.hn;
