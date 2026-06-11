@@ -218,6 +218,80 @@ function getCustomChars(rows) {
     .join("");
 }
 
+function parseHNStructure(hn) {
+  if (!hn) return [];
+  const upper = String(hn).toUpperCase();
+  const parts = [];
+  let currentType = null;
+  let currentCount = 0;
+
+  for (const ch of upper) {
+    const isAlpha = /[A-Z]/.test(ch);
+    const isDigit = /[0-9]/.test(ch);
+    const type = isAlpha ? "alpha" : isDigit ? "digit" : null;
+
+    if (type === currentType) {
+      currentCount++;
+    } else {
+      if (currentType && currentCount > 0) {
+        parts.push({ type: currentType, count: currentCount });
+      }
+      currentType = type;
+      currentCount = 1;
+    }
+  }
+
+  if (currentType && currentCount > 0) {
+    parts.push({ type: currentType, count: currentCount });
+  }
+
+  return parts;
+}
+
+function rowsToExpectedStructure(rows) {
+  return (rows || []).map((r) => ({
+    type: r.type === "digit" ? "digit" : "alpha",
+    count: r.count,
+  }));
+}
+
+function structuresMatch(ocrStructure, expectedStructure) {
+  if (ocrStructure.length !== expectedStructure.length) return false;
+
+  for (let i = 0; i < ocrStructure.length; i++) {
+    if (ocrStructure[i].type !== expectedStructure[i].type) return false;
+    if (ocrStructure[i].count !== expectedStructure[i].count) return false;
+  }
+
+  return true;
+}
+
+function reconstructHN(ocrHN, rows) {
+  let result = "";
+  let ocrIdx = 0;
+  const ocrUpper = String(ocrHN).toUpperCase();
+
+  for (const row of rows) {
+    const count = row.count;
+
+    if (row.type === "custom" && row.chars) {
+      const customPart = row.chars.toUpperCase().substring(0, count).padEnd(count, row.chars[0] || "X");
+      result += customPart;
+      ocrIdx += count;
+    } else if (row.type === "digit") {
+      const ocrDigitPart = ocrUpper.substring(ocrIdx, ocrIdx + count);
+      result += ocrDigitPart.replace(/[^0-9]/g, "").padEnd(count, "0").substring(0, count);
+      ocrIdx += count;
+    } else {
+      const ocrAlphaPart = ocrUpper.substring(ocrIdx, ocrIdx + count);
+      result += ocrAlphaPart.replace(/[^A-Z]/g, "").padEnd(count, "A").substring(0, count);
+      ocrIdx += count;
+    }
+  }
+
+  return result;
+}
+
 function extractHNWithConfig(rawText, hnConfig) {
   if (!rawText) return { hn: null, customNotFound: false };
 
@@ -236,22 +310,56 @@ function extractHNWithConfig(rawText, hnConfig) {
   if (dxMatch && new RegExp(`^${patternStr}$`).test(dxMatch[0])) {
     candidates = [dxMatch[0], ...candidates];
   }
-  if (candidates.length === 0) {
-    return { hn: null, customNotFound: hasCustomRows(rows) };
-  }
 
-  const bestHN = candidates.sort((a, b) => b.length - a.length)[0];
+  if (candidates.length > 0) {
+    const bestHN = candidates.sort((a, b) => b.length - a.length)[0];
+
+    if (hasCustomRows(rows)) {
+      const customChars = getCustomChars(rows);
+      const upperHN = bestHN.toUpperCase();
+      const allFound = customChars.split("").every((ch) => upperHN.includes(ch));
+      if (!allFound) {
+        return { hn: null, customNotFound: true };
+      }
+    }
+
+    return { hn: bestHN, customNotFound: false };
+  }
 
   if (hasCustomRows(rows)) {
-    const customChars = getCustomChars(rows);
-    const upperHN = bestHN.toUpperCase();
-    const allFound = customChars.split("").every((ch) => upperHN.includes(ch));
-    if (!allFound) {
-      return { hn: null, customNotFound: true };
+    const expectedStructure = rowsToExpectedStructure(rows);
+
+    const rawLines = String(rawText || "").split(/\r?\n/).filter((l) => l.trim().length > 0);
+    const searchTargets = [];
+
+    for (const line of rawLines) {
+      const cleaned = line.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+      if (cleaned.length >= 4) {
+        searchTargets.push(cleaned);
+      }
     }
+
+    const normalizedCandidates = text.match(/[A-Z]{1,6}\d{4,10}/g) || [];
+    searchTargets.push(...normalizedCandidates);
+
+    const uniqueTargets = [...new Set(searchTargets)];
+
+    for (const candidate of uniqueTargets) {
+      const ocrStructure = parseHNStructure(candidate);
+
+      if (structuresMatch(ocrStructure, expectedStructure)) {
+        const reconstructed = reconstructHN(candidate, rows);
+
+        if (isValidHNFormatWithConfig(reconstructed, hnConfig)) {
+          return { hn: reconstructed, customNotFound: false, reconstructed: true };
+        }
+      }
+    }
+
+    return { hn: null, customNotFound: true };
   }
 
-  return { hn: bestHN, customNotFound: false };
+  return { hn: null, customNotFound: false };
 }
 
 function isValidHNFormatWithConfig(code, hnConfig) {
@@ -318,36 +426,18 @@ function isLikelyVendor2ProcessedFile(nameWithoutExt) {
 }
 
 function calculateCropArea(width, height, hnConfig) {
-  const cropPctW = hnConfig?.cropW ?? 0.15;
-  const cropPctH = hnConfig?.cropH ?? 0.04;
+  const cropPctW = hnConfig?.cropW ?? 0.9;
+  const cropPctH = hnConfig?.cropH ?? 0.12;
   const cropW = Math.max(1, Math.floor(width * cropPctW));
   const cropH = Math.max(1, Math.floor(height * cropPctH));
 
-  const cropX = hnConfig?.cropX ?? 0.075;
-  const cropY = hnConfig?.cropY ?? 0.11;
+  const cropX = hnConfig?.cropX ?? 0.05;
+  const cropY = hnConfig?.cropY ?? 0.08;
 
   const left = Math.max(0, Math.min(width - cropW, Math.floor(cropX * width - cropW / 2)));
   const top = Math.max(0, Math.min(height - cropH, Math.floor(cropY * height - cropH / 2)));
 
   return { left, top, width: cropW, height: cropH };
-}
-
-function calculateTopLeftTextArea(width, height) {
-  return {
-    left: 0,
-    top: 0,
-    width: Math.max(1, Math.floor(width * 0.18)),
-    height: Math.max(1, Math.floor(height * 0.2)),
-  };
-}
-
-function calculateWideTopLeftTextArea(width, height) {
-  return {
-    left: 0,
-    top: 0,
-    width: Math.max(1, Math.floor(width * 0.38)),
-    height: Math.max(1, Math.floor(height * 0.25)),
-  };
 }
 
 function normalizePathSafe(targetPath) {
@@ -390,7 +480,7 @@ async function runOCR(imagePath) {
   try {
     await worker.setParameters({
       tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
     });
     return await worker.recognize(imagePath);
   } finally {
@@ -400,31 +490,11 @@ async function runOCR(imagePath) {
 
 function getOcrFilters(hnConfig) {
   return {
-    threshold: hnConfig?.threshold ?? 255,
+    threshold: hnConfig?.threshold ?? 0,
     brightness: hnConfig?.brightness ?? 0,
-    contrast: hnConfig?.contrast ?? 1,
-    sharpen: hnConfig?.sharpen ?? 0.8,
+    contrast: hnConfig?.contrast ?? 1.0,
+    sharpen: hnConfig?.sharpen ?? 0,
     normalize: hnConfig?.normalize ?? true,
-  };
-}
-
-function withLabelOcrFilters(hnConfig) {
-  const threshold = hnConfig?.threshold;
-  return {
-    ...(hnConfig || {}),
-    threshold: typeof threshold === "number" && threshold < 255 ? threshold : 140,
-    normalize: hnConfig?.normalize ?? true,
-  };
-}
-
-function withContrastLabelOcrFilters(hnConfig) {
-  return {
-    ...(hnConfig || {}),
-    threshold: 255,
-    brightness: -80,
-    contrast: 2,
-    sharpen: 1,
-    normalize: true,
   };
 }
 
@@ -438,8 +508,8 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix, hnConfig = nul
     let pipeline = sharp(imagePath)
       .extract(cropArea)
       .resize(
-        Math.max(1, cropArea.width * 10),
-        Math.max(1, cropArea.height * 10),
+        Math.max(1, cropArea.width * 15),
+        Math.max(1, cropArea.height * 15),
         { fit: "fill" },
       )
       .grayscale();
@@ -456,7 +526,7 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix, hnConfig = nul
       pipeline = pipeline.sharpen({ sigma: filters.sharpen });
     }
 
-    if (filters.threshold < 255) {
+    if (filters.threshold > 0 && filters.threshold < 255) {
       pipeline = pipeline.threshold(filters.threshold);
     }
 
@@ -464,7 +534,18 @@ async function extractHnFromCrop(imagePath, cropArea, tempSuffix, hnConfig = nul
 
     const ocr = await runOCR(tempFile);
     const text = ocr?.data?.text || "";
-    console.log("[OCR DEBUG] tempFile:", tempFile, "→ text:", JSON.stringify(text));
+    console.log(`[OCR] ${path.basename(imagePath)}: ${text.trim()}`);
+
+    const ocrClean = text.replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 30);
+    if (ocrClean) {
+      const renamedTemp = `${imagePath}_${ocrClean}${tempSuffix}`;
+      try {
+        if (fs.existsSync(tempFile)) {
+          fs.renameSync(tempFile, renamedTemp);
+          tempFile = renamedTemp;
+        }
+      } catch {}
+    }
 
     let normalizedHn;
     if (hnConfig) {
@@ -738,54 +819,12 @@ async function processVendor2ImageFile(reportRootPath, imagePath, hnConfig = nul
 
     const cropArea = calculateCropArea(width, height, hnConfig);
 
-    let extracted = await extractHnFromCrop(
+    const extracted = await extractHnFromCrop(
       imageFile.path,
       cropArea,
       "_vendor2_ocr.jpg",
       hnConfig,
     );
-
-    if (!extracted.hn) {
-      const labelArea = calculateTopLeftTextArea(width, height);
-      const fallbackExtracted = await extractHnFromCrop(
-        imageFile.path,
-        labelArea,
-        "_vendor2_label_ocr.jpg",
-        withLabelOcrFilters(hnConfig),
-      );
-
-      if (fallbackExtracted.hn || !extracted.text) {
-        extracted = fallbackExtracted;
-      } else {
-        extracted = {
-          ...extracted,
-          customNotFound: extracted.customNotFound || fallbackExtracted.customNotFound,
-          customChars: extracted.customChars || fallbackExtracted.customChars,
-          text: `${extracted.text}\n${fallbackExtracted.text || ""}`,
-        };
-      }
-    }
-
-    if (!extracted.hn) {
-      const wideLabelArea = calculateWideTopLeftTextArea(width, height);
-      const contrastExtracted = await extractHnFromCrop(
-        imageFile.path,
-        wideLabelArea,
-        "_vendor2_label_contrast_ocr.jpg",
-        withContrastLabelOcrFilters(hnConfig),
-      );
-
-      if (contrastExtracted.hn || !extracted.text) {
-        extracted = contrastExtracted;
-      } else {
-        extracted = {
-          ...extracted,
-          customNotFound: extracted.customNotFound || contrastExtracted.customNotFound,
-          customChars: extracted.customChars || contrastExtracted.customChars,
-          text: `${extracted.text}\n${contrastExtracted.text || ""}`,
-        };
-      }
-    }
 
     const text = extracted.text;
     const hn = extracted.hn;
